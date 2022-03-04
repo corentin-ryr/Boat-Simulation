@@ -1,12 +1,18 @@
 ﻿using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using System.Linq;
 
+[RequireComponent(typeof(MeshCollider))]
+[RequireComponent(typeof(MeshFilter))]
+[RequireComponent(typeof(MeshRenderer))]
 public class Water : MonoBehaviour
 {
 
     MeshFilter meshFilter;
+    MeshCollider meshCollider;
     Mesh mesh;
+    Mesh sharedMesh;
     public Mesh Mesh { get => mesh; }
 
     [Header("Debug option")]
@@ -20,7 +26,18 @@ public class Water : MonoBehaviour
     void Start()
     {
         meshFilter = GetComponent<MeshFilter>();
-        mesh = meshFilter.mesh; ;
+        mesh = meshFilter.mesh;
+
+        sharedMesh = new Mesh();
+        sharedMesh.vertices = mesh.vertices;
+        sharedMesh.triangles = mesh.triangles.Reverse().ToArray();
+
+
+        meshCollider = GetComponent<MeshCollider>();
+        meshCollider.sharedMesh = sharedMesh;
+
+
+        gameObject.layer = 4; //4 is Water
 
         MeshDataPrecomputation();
     }
@@ -37,6 +54,9 @@ public class Water : MonoBehaviour
 
         mesh.vertices = vertices;
         meshFilter.mesh = mesh;
+
+        sharedMesh.vertices = vertices;
+        meshCollider.sharedMesh = sharedMesh;
     }
 
     private void MeshDataPrecomputation()

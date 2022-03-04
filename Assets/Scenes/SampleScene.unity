@@ -376,6 +376,7 @@ GameObject:
   - component: {fileID: 1177537123}
   - component: {fileID: 1177537122}
   - component: {fileID: 1177537121}
+  - component: {fileID: 1177537125}
   m_Layer: 0
   m_Name: Water
   m_TagString: Untagged
@@ -461,6 +462,20 @@ Transform:
   m_Father: {fileID: 0}
   m_RootOrder: 3
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!64 &1177537125
+MeshCollider:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1177537120}
+  m_Material: {fileID: 0}
+  m_IsTrigger: 0
+  m_Enabled: 1
+  serializedVersion: 4
+  m_Convex: 0
+  m_CookingOptions: 30
+  m_Mesh: {fileID: 10209, guid: 0000000000000000e000000000000000, type: 0}
 --- !u!1 &1321462902
 GameObject:
   m_ObjectHideFlags: 0
@@ -501,7 +516,8 @@ MonoBehaviour:
   showStatValues: 0
   showCandidatesBoat: 1
   showCandidatesWater: 1
-  showIntersectionLine: 1
+  showIntersectionLine: 0
+  showIntersectionMesh: 1
 --- !u!23 &1321462905
 MeshRenderer:
   m_ObjectHideFlags: 0
@@ -560,7 +576,7 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1321462902}
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalPosition: {x: 0, y: 0.281, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -575,10 +591,10 @@ Rigidbody:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1321462902}
   serializedVersion: 2
-  m_Mass: 1
-  m_Drag: 0
+  m_Mass: 400
+  m_Drag: 1
   m_AngularDrag: 0.05
-  m_UseGravity: 0
+  m_UseGravity: 1
   m_IsKinematic: 0
   m_Interpolate: 0
   m_Constraints: 0

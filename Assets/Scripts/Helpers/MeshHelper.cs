@@ -3,40 +3,32 @@ using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
 
-public struct Triangle
+public class Triangle
 {
-    public Triangle(int triangleIndex, int n1, int n2, int n3) //Vector3 vertex1, Vector3 vertex2, Vector3 vertex3, 
+    public Triangle(int triangleIndex, Vector3 v1, Vector3 v2, Vector3 v3) //Vector3 vertex1, Vector3 vertex2, Vector3 vertex3, 
     {
         this.TriangleIndex = triangleIndex;
-        // this.Vertex1 = vertex1;
-        // this.Vertex2 = vertex2;
-        // this.Vertex3 = vertex3;
-
-        this.N1 = n1;
-        this.N2 = n2;
-        this.N3 = n3;
+        this.Vertex1 = v1;
+        this.Vertex2 = v2;
+        this.Vertex3 = v3;
     }
 
     public int TriangleIndex { get; }
 
     //The 3 vertices of the triangle
-    // public Vector3 Vertex1 { get; }
-    // public Vector3 Vertex2 { get; }
-    // public Vector3 Vertex3 { get; }
+    public Vector3 Vertex1 { get; }
+    public Vector3 Vertex2 { get; }
+    public Vector3 Vertex3 { get; }
 
     //The 3 neighbors
-    public int N1 { get; }//Neighbor between triangle[TriangleIndex * 3] and triangle[TriangleIndex * 3+1]
-    public int N2 { get; }//Neighbor between triangle[TriangleIndex * 3+1] and triangle[TriangleIndex * 3+2]
-    public int N3 { get; }//Neighbor between triangle[TriangleIndex * 3+2] and triangle[TriangleIndex * 3]
+    public Triangle T1 { get; set; }//Neighbor between triangle[TriangleIndex * 3] and triangle[TriangleIndex * 3+1]
+    public Triangle T2 { get; set; }//Neighbor between triangle[TriangleIndex * 3+1] and triangle[TriangleIndex * 3+2]
+    public Triangle T3 { get; set; }//Neighbor between triangle[TriangleIndex * 3+2] and triangle[TriangleIndex * 3]
 
-    public int[] GetNeighborIndices()
-    {
-        return new int[] { N1, N2, N3 };
-    }
 
-    public override int GetHashCode()
+    public Triangle[] GetNeighbors()
     {
-        return TriangleIndex;
+        return new Triangle[] { T1, T2, T3 };
     }
 
 }
@@ -58,8 +50,8 @@ public struct Cell
 
     public Bounds Bounds { get; }
     private List<Triangle> triangleSet1;
-    public List<Triangle> TriangleSet1 { get => triangleSet1; }
-    bool hasCandidatePotential;
+    public Triangle[] TriangleSet1 { get => triangleSet1.ToArray(); }
+    private bool hasCandidatePotential;
     public bool HasCandidatePotential { get => hasCandidatePotential; }
 
     public void AddSet1(Triangle triangle)
@@ -68,7 +60,7 @@ public struct Cell
         hasCandidatePotential = true;
     }
     private List<Triangle> triangleSet2;
-    public List<Triangle> TriangleSet2 { get => triangleSet2; }
+    public Triangle[] TriangleSet2 { get => triangleSet2.ToArray(); }
 
     public void AddSet2(Triangle triangle)
     {
@@ -77,8 +69,6 @@ public struct Cell
 
     public bool HasCandidates()
     {
-        // Debug.Log(TriangleSet1.Count);
-        // Debug.Log(TriangleSet2.Count);
         if (triangleSet1.Count > 0 && triangleSet2.Count > 0)
         {
             return true;
@@ -88,10 +78,8 @@ public struct Cell
 
     public void resetSet2()
     {
-        TriangleSet2.Clear();
+        triangleSet2.Clear();
     }
-
-
 }
 
 public static class MeshHelper
@@ -102,25 +90,28 @@ public static class MeshHelper
         int Nt = mesh.triangles.Length / 3;
         int Nv = mesh.vertexCount;
 
-        List<int>[] S = new List<int>[Nv];
-        for (int i = 0; i < Nt; i++)
-        {
-            (S[mesh.triangles[i * 3]] ??= new List<int>()).Add(i);
-            (S[mesh.triangles[i * 3 + 1]] ??= new List<int>()).Add(i);
-            (S[mesh.triangles[i * 3 + 2]] ??= new List<int>()).Add(i);
-        }
-
+        List<Triangle>[] S = new List<Triangle>[Nv];
         Triangle[] triangleNeighbors = new Triangle[Nt];
         for (int i = 0; i < Nt; i++)
         {
-            IEnumerable<int> n1 = S[mesh.triangles[i * 3]].Intersect(S[mesh.triangles[i * 3 + 1]]);
-            IEnumerable<int> n2 = S[mesh.triangles[i * 3 + 1]].Intersect(S[mesh.triangles[i * 3 + 2]]);
-            IEnumerable<int> n3 = S[mesh.triangles[i * 3 + 2]].Intersect(S[mesh.triangles[i * 3]]);
+            Triangle triangle = new Triangle(i, mesh.vertices[mesh.triangles[i * 3]],
+                                                mesh.vertices[mesh.triangles[i * 3 + 1]],
+                                                mesh.vertices[mesh.triangles[i * 3 + 2]]);
+            triangleNeighbors[i] = triangle;
+            (S[mesh.triangles[i * 3]] ??= new List<Triangle>()).Add(triangle);
+            (S[mesh.triangles[i * 3 + 1]] ??= new List<Triangle>()).Add(triangle);
+            (S[mesh.triangles[i * 3 + 2]] ??= new List<Triangle>()).Add(triangle);
+        }
 
-            triangleNeighbors[i] = new Triangle(i,
-                                                n1.Any(p => p != i) ? n1.First<int>(p => p != i) : -1,
-                                                n2.Any(p => p != i) ? n2.First<int>(p => p != i) : -1,
-                                                n3.Any(p => p != i) ? n3.First<int>(p => p != i) : -1);
+        for (int i = 0; i < Nt; i++)
+        {
+            IEnumerable<Triangle> t1 = S[mesh.triangles[i * 3]].Intersect(S[mesh.triangles[i * 3 + 1]]);
+            IEnumerable<Triangle> t2 = S[mesh.triangles[i * 3 + 1]].Intersect(S[mesh.triangles[i * 3 + 2]]);
+            IEnumerable<Triangle> t3 = S[mesh.triangles[i * 3 + 2]].Intersect(S[mesh.triangles[i * 3]]);
+
+            triangleNeighbors[i].T1 = t1.Any(p => p.TriangleIndex != i) ? t1.First<Triangle>(p => p.TriangleIndex != i) : null;
+            triangleNeighbors[i].T2 = t2.Any(p => p.TriangleIndex != i) ? t2.First<Triangle>(p => p.TriangleIndex != i) : null;
+            triangleNeighbors[i].T3 = t3.Any(p => p.TriangleIndex != i) ? t3.First<Triangle>(p => p.TriangleIndex != i) : null;
         }
 
         return triangleNeighbors;
