@@ -1,6 +1,7 @@
 ﻿using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
+using Habrador_Computational_Geometry;
 using UnityEngine;
 
 public class Triangle
@@ -170,6 +171,65 @@ public static class MeshHelper
 
             Vector3 normal = Vector3.Cross(vertices[triangles[i + 1]] - vertices[triangles[i]], vertices[triangles[i + 2]] - vertices[triangles[i]]);
             float faceSign = Mathf.Sign(Vector3.Dot(normal, vertices[triangles[i]]));
+
+            volume += faceSign * tetraVolume;
+            barycentre += faceSign * tetraCentroid;
+
+        }
+
+        barycentre /= volume;
+
+        return (barycentre, volume);
+    }
+    public static (Vector3, float) ComputeVolumeAndBarycentre(Triangle2[] triangles)
+    {
+        float volume = 0f;
+        Vector3 barycentre = Vector3.zero;
+
+
+        for (int i = 0; i < triangles.Length; i += 3)
+        {
+            Vector3 vertex1 = triangles[i].p1.ToVector3();
+            Vector3 vertex2 = triangles[i].p2.ToVector3();
+            Vector3 vertex3 = triangles[i].p3.ToVector3();
+
+            Vector3 tempCrossProd = Vector3.Cross(vertex1 - vertex3, vertex2 - vertex3);
+
+            float tetraVolume = Mathf.Abs(Vector3.Dot(-vertex3, tempCrossProd)) / 6f;
+            Vector3 tetraCentroid = (vertex1 + vertex2 + vertex3) * tetraVolume * 0.25f;
+
+            Vector3 normal = Vector3.Cross(vertex2 - vertex1, vertex3 - vertex1);
+            float faceSign = Mathf.Sign(Vector3.Dot(normal, vertex1));
+
+            volume += faceSign * tetraVolume;
+            barycentre += faceSign * tetraCentroid;
+
+        }
+
+        barycentre /= volume;
+
+        return (barycentre, volume);
+    }
+
+    public static (Vector3, float) ComputeVolumeAndBarycentre(Triangle[] triangles)
+    {
+        float volume = 0f;
+        Vector3 barycentre = Vector3.zero;
+
+
+        for (int i = 0; i < triangles.Length; i += 3)
+        {
+            Vector3 vertex1 = triangles[i].Vertex1;
+            Vector3 vertex2 = triangles[i].Vertex2;
+            Vector3 vertex3 = triangles[i].Vertex3;
+
+            Vector3 tempCrossProd = Vector3.Cross(vertex1 - vertex3, vertex2 - vertex3);
+
+            float tetraVolume = Mathf.Abs(Vector3.Dot(-vertex3, tempCrossProd)) / 6f;
+            Vector3 tetraCentroid = (vertex1 + vertex2 + vertex3) * tetraVolume * 0.25f;
+
+            Vector3 normal = Vector3.Cross(vertex2 - vertex1, vertex3 - vertex1);
+            float faceSign = Mathf.Sign(Vector3.Dot(normal, vertex1));
 
             volume += faceSign * tetraVolume;
             barycentre += faceSign * tetraCentroid;

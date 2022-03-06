@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Collections.Generic;
+using Habrador_Computational_Geometry;
 using UnityEngine;
 
 public static class DebugHelper
@@ -53,6 +54,19 @@ public static class DebugHelper
             Debug.DrawLine(debugVertices[i * 3 + 2], debugVertices[i * 3], color);
         }
     }
+    public static void ShowMesh(Triangle[] triangles, Color color)
+    {
+        for (int i = 0; i < triangles.Length; i++)
+        {
+            Vector3 a = triangles[i].Vertex1;
+            Vector3 b = triangles[i].Vertex2;
+            Vector3 c = triangles[i].Vertex3;
+
+            Debug.DrawLine(a, b, color);
+            Debug.DrawLine(b, c, color);
+            Debug.DrawLine(c, a, color);
+        }
+    }
 
     public static void ShowMesh(Vector3[] vertices, int[] triangles, Transform parentTransfrom, Color color)
     {
@@ -67,17 +81,6 @@ public static class DebugHelper
             Debug.DrawLine(c, a, color);
         }
     }
-    public static void ShowMesh(Vector3[] vertices, int[] triangles, Color color)
-    {
-        for (int i = 0; i < triangles.Length / 3; i++)
-        {
-            Vector3 a = vertices[triangles[i * 3]];
-            Vector3 b = vertices[triangles[i * 3 + 1]];
-            Vector3 c = vertices[triangles[i * 3 + 2]];
+ 
 
-            Debug.DrawLine(a, b, color);
-            Debug.DrawLine(b, c, color);
-            Debug.DrawLine(c, a, color);
-        }
-    }
 }
