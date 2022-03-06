@@ -16,15 +16,25 @@ public class Triangle
     public int TriangleIndex { get; }
 
     //The 3 vertices of the triangle
-    public Vector3 Vertex1 { get; }
-    public Vector3 Vertex2 { get; }
-    public Vector3 Vertex3 { get; }
+    private Vector3 vertex1;
+    public Vector3 Vertex1 { get => vertex1; set => vertex1 = value; }
+    public void SetVertex1Height(float height) { this.vertex1.y = height; }
+    private Vector3 vertex2;
+    public Vector3 Vertex2 { get => vertex2; set => vertex2 = value; }
+    public void SetVertex2Height(float height) { this.vertex2.y = height; }
+    private Vector3 vertex3;
+    public Vector3 Vertex3 { get => vertex3; set => vertex3 = value; }
+    public void SetVertex3Height(float height) { this.vertex3.y = height; }
+    public Vector3[] GetVertices()
+    {
+        return new Vector3[] { Vertex1, Vertex2, Vertex3 };
+    }
+
 
     //The 3 neighbors
     public Triangle T1 { get; set; }//Neighbor between triangle[TriangleIndex * 3] and triangle[TriangleIndex * 3+1]
     public Triangle T2 { get; set; }//Neighbor between triangle[TriangleIndex * 3+1] and triangle[TriangleIndex * 3+2]
     public Triangle T3 { get; set; }//Neighbor between triangle[TriangleIndex * 3+2] and triangle[TriangleIndex * 3]
-
 
     public Triangle[] GetNeighbors()
     {
@@ -124,7 +134,7 @@ public static class MeshHelper
         int nx = Mathf.CeilToInt(meshBounds.size.x / cellSize.x);
         int ny = Mathf.CeilToInt(meshBounds.size.y / cellSize.y);
         int nz = Mathf.CeilToInt(meshBounds.size.z / cellSize.z);
-        Debug.Log(nz);
+
         Vector3 newCellSize = new Vector3((meshBounds.size.x / nx), (meshBounds.size.y / ny), (meshBounds.size.z / nz));
         for (int i = 0; i < nx; i++)
         {
@@ -169,6 +179,81 @@ public static class MeshHelper
         barycentre /= volume;
 
         return (barycentre, volume);
+    }
+
+    public static Mesh WeldVertices(Mesh aMesh, float aMaxDelta = 0.01f)
+    {
+        var verts = aMesh.vertices;
+        Dictionary<Vector3, int> duplicateHashTable = new Dictionary<Vector3, int>();
+        List<int> newVerts = new List<int>();
+        int[] map = new int[verts.Length];
+
+        //create mapping and find duplicates, dictionaries are like hashtables, mean fast
+        for (int i = 0; i < verts.Length; i++)
+        {
+            if (!duplicateHashTable.ContainsKey(verts[i]))
+            {
+                duplicateHashTable.Add(verts[i], newVerts.Count);
+                map[i] = newVerts.Count;
+                newVerts.Add(i);
+            }
+            else
+            {
+                map[i] = duplicateHashTable[verts[i]];
+            }
+        }
+
+        // create new vertices
+        var verts2 = new Vector3[newVerts.Count];
+        var normals2 = new Vector3[newVerts.Count];
+        var uvs2 = new Vector2[newVerts.Count];
+        for (int i = 0; i < newVerts.Count; i++)
+        {
+            int a = newVerts[i];
+            verts2[i] = verts[a];
+        }
+        // map the triangle to the new vertices
+        var tris = aMesh.triangles;
+        for (int i = 0; i < tris.Length; i++)
+        {
+            tris[i] = map[tris[i]];
+        }
+        aMesh.triangles = tris;
+        aMesh.vertices = verts2;
+
+        aMesh.RecalculateBounds();
+        aMesh.RecalculateNormals();
+
+        return aMesh;
+    }
+
+
+    public static (Vector3[], int[]) GenerateGridMesh(int xSize, int ySize)
+    {
+
+        Vector3[] vertices = new Vector3[(xSize + 1) * (ySize + 1)];
+        for (int i = 0, y = 0; y <= ySize; y++)
+        {
+            for (int x = 0; x <= xSize; x++, i++)
+            {
+                vertices[i] = new Vector3(x, 0, y);
+            }
+        }
+
+
+        int[] triangles = new int[xSize * ySize * 6];
+        for (int ti = 0, vi = 0, y = 0; y < ySize; y++, vi++)
+        {
+            for (int x = 0; x < xSize; x++, ti += 6, vi++)
+            {
+                triangles[ti] = vi;
+                triangles[ti + 3] = triangles[ti + 2] = vi + 1;
+                triangles[ti + 4] = triangles[ti + 1] = vi + xSize + 1;
+                triangles[ti + 5] = vi + xSize + 2;
+            }
+        }
+
+        return (vertices, triangles);
     }
 
 }

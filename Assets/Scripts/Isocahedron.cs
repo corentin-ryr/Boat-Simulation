@@ -21,12 +21,12 @@ public class Isocahedron
     // public Vector3Int[] triangles_array = new Vector3Int[0];
     private NoDuplicatesList edges;
 
-    // System.Action<Vector3Int[], Vector3[]> callback;
+    System.Action<Vector3Int[], Vector3[]> callback;
 
 
     #endregion
 
-    public Isocahedron(int nbSubdivision, float radius, ComputeShader subdivisionShader)
+    public Isocahedron(int nbSubdivision, float radius, ComputeShader subdivisionShader, System.Action<Vector3Int[], Vector3[]> callback )
     {
         this.nbSubdivision = nbSubdivision;
         this.radius = radius;
@@ -34,6 +34,7 @@ public class Isocahedron
 
         faces = new FacesAndEdgesList();
         edges = faces.getEdges();
+        this.callback = callback;
     }
 
     public void CreateSphere()
@@ -75,7 +76,7 @@ public class Isocahedron
                 faces.Add(item);
             }
 
-            EventManager.OnFinishedGeneratingMesh();
+            callback(triangles_array, vertices.ToArray());
         }
         buffer.Dispose();
 

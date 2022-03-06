@@ -11,9 +11,9 @@ public class Water : MonoBehaviour
 
     MeshFilter meshFilter;
     MeshCollider meshCollider;
-    Mesh mesh;
+    // Mesh mesh;
     Mesh sharedMesh;
-    public Mesh Mesh { get => mesh; }
+    public Mesh Mesh { get => meshFilter.mesh; }
 
     [Header("Debug option")]
     public bool showBackgroundGrid;
@@ -26,11 +26,14 @@ public class Water : MonoBehaviour
     void Start()
     {
         meshFilter = GetComponent<MeshFilter>();
-        mesh = meshFilter.mesh;
+
+        (Vector3[] vertices, int[] triangles) = MeshHelper.GenerateGridMesh(20, 20);
+        meshFilter.mesh.vertices = vertices;
+        meshFilter.mesh.triangles = triangles;
 
         sharedMesh = new Mesh();
-        sharedMesh.vertices = mesh.vertices;
-        sharedMesh.triangles = mesh.triangles.Reverse().ToArray();
+        sharedMesh.vertices = meshFilter.mesh.vertices;
+        sharedMesh.triangles = meshFilter.mesh.triangles.Reverse().ToArray();
 
 
         meshCollider = GetComponent<MeshCollider>();
@@ -45,23 +48,35 @@ public class Water : MonoBehaviour
 
     void FixedUpdate()
     {
-        Vector3[] vertices = mesh.vertices;
+        Vector3[] vertices = meshFilter.mesh.vertices;
 
         for (int i = 0; i < vertices.Length; i++)
         {
-            vertices[i] = new Vector3(vertices[i].x, Mathf.Sin((vertices[i].x + Time.time) * 1f) * 0.2f, vertices[i].z);
+            vertices[i].y = GetHeight(vertices[i]);
         }
 
-        mesh.vertices = vertices;
-        meshFilter.mesh = mesh;
+        for (int i = 0; i < triangleNeighbors.Length; i++)
+        {
+            triangleNeighbors[i].SetVertex1Height(GetHeight(triangleNeighbors[i].Vertex1));
+            triangleNeighbors[i].SetVertex2Height(GetHeight(triangleNeighbors[i].Vertex2));
+            triangleNeighbors[i].SetVertex3Height(GetHeight(triangleNeighbors[i].Vertex3));
+        }
 
-        sharedMesh.vertices = vertices;
-        meshCollider.sharedMesh = sharedMesh;
+        // mesh.vertices = vertices;
+        meshFilter.mesh.vertices = vertices;
+
+        // sharedMesh.vertices = vertices;
+        meshCollider.sharedMesh.vertices = vertices;
     }
 
     private void MeshDataPrecomputation()
     {
-        triangleNeighbors = MeshHelper.FindTriangleNeighbors(mesh);
+        triangleNeighbors = MeshHelper.FindTriangleNeighbors(meshFilter.mesh);
+    }
+
+    private float GetHeight(Vector3 position)
+    {
+        return Mathf.Sin(position.x * 0.5f + Time.time) * 1f;
     }
 
     #region Debug and Gizmos =======================================================================

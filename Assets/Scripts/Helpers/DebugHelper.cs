@@ -37,16 +37,16 @@ public static class DebugHelper
         Debug.DrawLine(p4, p8, Color.cyan, delay);
     }
 
-    public static void ShowMesh(Triangle[] triangles, Transform transform, Mesh parentMesh, Color color)
+    public static void ShowMesh(Triangle[] triangles, Transform transform, Color color)
     {
         Debug.Log("Number of candidates: " + triangles.Length);
         Vector3[] debugVertices = new Vector3[triangles.Length * 3];
         Matrix4x4 transformation = transform.localToWorldMatrix;
         for (int i = 0; i < triangles.Length; i++)
         {
-            debugVertices[i * 3] = transformation.MultiplyPoint3x4(parentMesh.vertices[parentMesh.triangles[triangles[i].TriangleIndex * 3]]);
-            debugVertices[i * 3 + 1] = transformation.MultiplyPoint3x4(parentMesh.vertices[parentMesh.triangles[triangles[i].TriangleIndex * 3 + 1]]);
-            debugVertices[i * 3 + 2] = transformation.MultiplyPoint3x4(parentMesh.vertices[parentMesh.triangles[triangles[i].TriangleIndex * 3 + 2]]);
+            debugVertices[i * 3] = transformation.MultiplyPoint3x4(triangles[i].Vertex1);
+            debugVertices[i * 3 + 1] = transformation.MultiplyPoint3x4(triangles[i].Vertex2);
+            debugVertices[i * 3 + 2] = transformation.MultiplyPoint3x4(triangles[i].Vertex3);
 
             Debug.DrawLine(debugVertices[i * 3], debugVertices[i * 3 + 1], color);
             Debug.DrawLine(debugVertices[i * 3 + 1], debugVertices[i * 3 + 2], color);
@@ -61,6 +61,19 @@ public static class DebugHelper
             Vector3 a = parentTransfrom.TransformPoint(vertices[triangles[i * 3]]);
             Vector3 b = parentTransfrom.TransformPoint(vertices[triangles[i * 3 + 1]]);
             Vector3 c = parentTransfrom.TransformPoint(vertices[triangles[i * 3 + 2]]);
+
+            Debug.DrawLine(a, b, color);
+            Debug.DrawLine(b, c, color);
+            Debug.DrawLine(c, a, color);
+        }
+    }
+    public static void ShowMesh(Vector3[] vertices, int[] triangles, Color color)
+    {
+        for (int i = 0; i < triangles.Length / 3; i++)
+        {
+            Vector3 a = vertices[triangles[i * 3]];
+            Vector3 b = vertices[triangles[i * 3 + 1]];
+            Vector3 c = vertices[triangles[i * 3 + 2]];
 
             Debug.DrawLine(a, b, color);
             Debug.DrawLine(b, c, color);
