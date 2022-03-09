@@ -181,7 +181,7 @@ public static class MeshHelper
 
         return (barycentre, volume);
     }
-    public static (Vector3, float) ComputeVolumeAndBarycentre(Triangle2[] triangles)
+    public static (Vector3, float) ComputeVolumeAndBarycentre(Triangle[] triangles, Vector3 referencePoint)
     {
         float volume = 0f;
         Vector3 barycentre = Vector3.zero;
@@ -189,9 +189,9 @@ public static class MeshHelper
 
         for (int i = 0; i < triangles.Length; i += 3)
         {
-            Vector3 vertex1 = triangles[i].p1.ToVector3();
-            Vector3 vertex2 = triangles[i].p2.ToVector3();
-            Vector3 vertex3 = triangles[i].p3.ToVector3();
+            Vector3 vertex1 = triangles[i].Vertex1 - referencePoint;
+            Vector3 vertex2 = triangles[i].Vertex2 - referencePoint;
+            Vector3 vertex3 = triangles[i].Vertex3 - referencePoint;
 
             Vector3 tempCrossProd = Vector3.Cross(vertex1 - vertex3, vertex2 - vertex3);
 
@@ -208,10 +208,10 @@ public static class MeshHelper
 
         barycentre /= volume;
 
-        return (barycentre, volume);
+        return (barycentre + referencePoint, volume);
     }
 
-    public static (Vector3, float) ComputeVolumeAndBarycentre(Triangle[] triangles)
+    public static (Vector3, float) ComputeVolumeAndBarycentre(Triangle[] triangles, Transform transform, Vector3 referencePoint)
     {
         float volume = 0f;
         Vector3 barycentre = Vector3.zero;
@@ -219,9 +219,9 @@ public static class MeshHelper
 
         for (int i = 0; i < triangles.Length; i += 3)
         {
-            Vector3 vertex1 = triangles[i].Vertex1;
-            Vector3 vertex2 = triangles[i].Vertex2;
-            Vector3 vertex3 = triangles[i].Vertex3;
+            Vector3 vertex1 = transform.TransformPoint(triangles[i].Vertex1) - referencePoint;
+            Vector3 vertex2 = transform.TransformPoint(triangles[i].Vertex2) - referencePoint;
+            Vector3 vertex3 = transform.TransformPoint(triangles[i].Vertex3) - referencePoint;
 
             Vector3 tempCrossProd = Vector3.Cross(vertex1 - vertex3, vertex2 - vertex3);
 
@@ -238,7 +238,7 @@ public static class MeshHelper
 
         barycentre /= volume;
 
-        return (barycentre, volume);
+        return (barycentre + referencePoint, volume);
     }
 
     public static Mesh WeldVertices(Mesh aMesh, float aMaxDelta = 0.01f)
@@ -288,15 +288,17 @@ public static class MeshHelper
     }
 
 
-    public static (Vector3[], int[]) GenerateGridMesh(int xSize, int ySize)
+    public static (Vector3[], int[], Vector2[]) GenerateGridMesh(int xSize, int ySize)
     {
 
         Vector3[] vertices = new Vector3[(xSize + 1) * (ySize + 1)];
+        Vector2[] uvs = new Vector2[(xSize + 1) * (ySize + 1)];
         for (int i = 0, y = 0; y <= ySize; y++)
         {
             for (int x = 0; x <= xSize; x++, i++)
             {
                 vertices[i] = new Vector3(x, 0, y);
+                uvs[i] = new Vector2(x / (float)xSize, y / (float)ySize);
             }
         }
 
@@ -313,7 +315,7 @@ public static class MeshHelper
             }
         }
 
-        return (vertices, triangles);
+        return (vertices, triangles, uvs);
     }
 
 }

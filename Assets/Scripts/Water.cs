@@ -11,9 +11,11 @@ public class Water : MonoBehaviour
 
     MeshFilter meshFilter;
     MeshCollider meshCollider;
-    // Mesh mesh;
-    Mesh sharedMesh;
+    Mesh sharedMeshCollider;
     public Mesh Mesh { get => meshFilter.mesh; }
+
+    float[] heightMap;
+    public float[] HeightMap { get => heightMap; }
 
     [Header("Debug option")]
     public bool showBackgroundGrid;
@@ -21,23 +23,30 @@ public class Water : MonoBehaviour
     Triangle[] triangleNeighbors;
     public Triangle[] TriangleNeighbors { get => triangleNeighbors; }
 
+    [Header("Parameters")]
+    public float waterAmplitude;
+
+
 
     // Start is called before the first frame update
     void Start()
     {
         meshFilter = GetComponent<MeshFilter>();
 
-        (Vector3[] vertices, int[] triangles) = MeshHelper.GenerateGridMesh(20, 20);
+        (Vector3[] vertices, int[] triangles, Vector2[] uvs) = MeshHelper.GenerateGridMesh(20, 20);
         meshFilter.mesh.vertices = vertices;
         meshFilter.mesh.triangles = triangles;
+        meshFilter.mesh.uv = uvs;
 
-        sharedMesh = new Mesh();
-        sharedMesh.vertices = meshFilter.mesh.vertices;
-        sharedMesh.triangles = meshFilter.mesh.triangles.Reverse().ToArray();
+        heightMap = new float[vertices.Length];
+
+        sharedMeshCollider = new Mesh();
+        sharedMeshCollider.vertices = meshFilter.mesh.vertices;
+        sharedMeshCollider.triangles = meshFilter.mesh.triangles.Reverse().ToArray();
 
 
         meshCollider = GetComponent<MeshCollider>();
-        meshCollider.sharedMesh = sharedMesh;
+        meshCollider.sharedMesh = sharedMeshCollider;
 
 
         gameObject.layer = 4; //4 is Water
@@ -52,7 +61,8 @@ public class Water : MonoBehaviour
 
         for (int i = 0; i < vertices.Length; i++)
         {
-            vertices[i].y = GetHeight(vertices[i]);
+            heightMap[i] = GetHeight(vertices[i]);
+            vertices[i].y = heightMap[i];
         }
 
         for (int i = 0; i < triangleNeighbors.Length; i++)
@@ -62,11 +72,9 @@ public class Water : MonoBehaviour
             triangleNeighbors[i].SetVertex3Height(GetHeight(triangleNeighbors[i].Vertex3));
         }
 
-        // mesh.vertices = vertices;
         meshFilter.mesh.vertices = vertices;
-
-        // sharedMesh.vertices = vertices;
-        meshCollider.sharedMesh.vertices = vertices;
+        sharedMeshCollider.vertices = vertices;
+        meshCollider.sharedMesh = sharedMeshCollider;
     }
 
     private void MeshDataPrecomputation()
@@ -76,7 +84,7 @@ public class Water : MonoBehaviour
 
     private float GetHeight(Vector3 position)
     {
-        return Mathf.Sin(position.x * 0.5f + Time.time) * 1f;
+        return Mathf.Sin(position.x * 0.5f + Time.time) * waterAmplitude;
     }
 
     #region Debug and Gizmos =======================================================================

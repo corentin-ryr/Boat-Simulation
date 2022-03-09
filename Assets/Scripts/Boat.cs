@@ -9,7 +9,7 @@ using System.Diagnostics;
 using System.Linq;
 using Habrador_Computational_Geometry;
 
-[RequireComponent(typeof(Rigidbody))]
+[RequireComponent(typeof(Rigidbody), typeof(MeshCollider))]
 public class Boat : MonoBehaviour
 {
     #region Variables =====================================================================================
@@ -33,22 +33,24 @@ public class Boat : MonoBehaviour
     List<Vector3> lowerChain;
     Vector3 a, b, c, d, e, f;
     Vector3 waterIntersectionNormal;
-    private Vector3 averageWaterPosition;
+    Vector3 averageWaterPosition;
+    int kernelTriangleCandidate;
 
     //References
     MeshFilter meshFilter;
     Rigidbody rigidbody;
+    MeshCollider meshCollider;
     Stopwatch stopWatch;
 
     //Editor variables
     [Header("References")]
     public Water water;
+    public ComputeShader triangleCandidateShader;
 
     [Header("Parameters")]
     public Vector3 cellMaxSize = new Vector3(0.2f, 0.2f, 0.2f);
     public bool procedurallyGeneratedMesh;
     public Vector3 centerOfMass;
-
 
 
     [Header("Debug option")]
@@ -60,6 +62,8 @@ public class Boat : MonoBehaviour
     public bool showIntersectionMesh;
     public bool showLowerChain;
     public bool showWaterNormal;
+    public bool showWaterAboveCheck;
+    public bool showImmersedBarycentre;
 
 
 
@@ -81,10 +85,14 @@ public class Boat : MonoBehaviour
 
         rigidbody = GetComponent<Rigidbody>();
         rigidbody.centerOfMass = centerOfMass;
+
+        meshCollider = GetComponent<MeshCollider>();
         stopWatch = new Stopwatch();
 
         chain = new List<Vector3>();
         lowerChain = new List<Vector3>();
+
+        Physics.IgnoreCollision(water.GetComponent<Collider>(), meshCollider);
 
         a = new Vector3();
         b = new Vector3();
@@ -125,7 +133,8 @@ public class Boat : MonoBehaviour
         waterTriangleNeighbors ??= water.TriangleNeighbors;
 
         stopWatch.Restart();
-        int[] cellCandidates = FindTriangleCandidates();
+        // int[] cellCandidates = FindTriangleCandidates();
+        int[] cellCandidates = FindTriangleCandidatesGPU();
 
 
         if (showCandidatesBoat)
@@ -150,7 +159,7 @@ public class Boat : MonoBehaviour
         if (chain?.Count == 0)
         {
             //Test if there is water above
-            UnityEngine.Debug.DrawRay(transform.position, Vector3.up * 10);
+            if (showWaterAboveCheck) UnityEngine.Debug.DrawRay(transform.position, Vector3.up * 10);
             if (Physics.Raycast(transform.position, Vector3.up, Mathf.Infinity, LayerMask.GetMask("Water")))
             {
                 rigidbody.AddForceAtPosition(volume * 1000 * 9.91f * Vector3.up, transform.TransformPoint(barycentre));
@@ -191,7 +200,7 @@ public class Boat : MonoBehaviour
 
         //We triangulate the sea (we just create a plane with the circle)
         List<Triangle> seaTriangulated = new List<Triangle>();
-        for (int i = 0; i < chain.Count-1; i++)
+        for (int i = 0; i < chain.Count - 1; i++)
         {
             seaTriangulated.Add(new Triangle(0, averageWaterPosition, chain[i], chain[i + 1]));
         }
@@ -218,12 +227,46 @@ public class Boat : MonoBehaviour
         meshFilter.mesh = MeshHelper.WeldVertices(meshFilter.mesh, 1E-5f);
         (barycentre, volume) = MeshHelper.ComputeVolumeAndBarycentre(meshFilter.mesh.vertices, meshFilter.mesh.triangles);
 
+        meshCollider.sharedMesh = meshFilter.mesh;
+
         //Precomputing the triangle neighbor relations and the background grid (only once at the beginning because we suppose that the mesh does not change)
         boatTriangleNeighbors = MeshHelper.FindTriangleNeighbors(meshFilter.mesh);
 
         gridCells = MeshHelper.ComputeBackgroundGrid(meshFilter.mesh.bounds, cellMaxSize, meshFilter.mesh.triangles.Length);
 
         AssignTrianglesToBoundingBox();
+
+        //Prepare the compute shader =======================================
+        kernelTriangleCandidate = triangleCandidateShader.FindKernel("FindTriangleCandidate");
+
+        //Set the bounds of gridcells
+        Vector3[] cellPositions = new Vector3[gridCells.Length];
+        Vector3[] cellSizes = new Vector3[gridCells.Length];
+        for (int i = 0; i < gridCells.Length; i++)
+        {
+            cellPositions[i] = gridCells[i].Bounds.center;
+            cellSizes[i] = gridCells[i].Bounds.size;
+        }
+        List<ComputeBuffer> tempBuffers = new List<ComputeBuffer>();
+
+        tempBuffers.Add(ComputeHelper.CreateAndSetBuffer(cellPositions, triangleCandidateShader, "cellPositions", kernelTriangleCandidate));
+        tempBuffers.Add(ComputeHelper.CreateAndSetBuffer(cellSizes, triangleCandidateShader, "cellSizes", kernelTriangleCandidate));
+        triangleCandidateShader.SetInt("nbCells", gridCells.Length);
+
+        //Set the water mesh data
+        float[] heightMap = new float[water.Mesh.vertexCount];
+        Vector2[] waterVerticesPlanPosition = new Vector2[water.Mesh.vertexCount];
+        for (int i = 0; i < water.Mesh.vertexCount; i++)
+        {
+            heightMap[i] = water.Mesh.vertices[i].y;
+            waterVerticesPlanPosition[i] = new Vector2(water.Mesh.vertices[i].x, water.Mesh.vertices[i].z);
+        }
+        tempBuffers.Add(ComputeHelper.CreateAndSetBuffer(heightMap, triangleCandidateShader, "verticesHeightMap", kernelTriangleCandidate));
+        tempBuffers.Add(ComputeHelper.CreateAndSetBuffer(waterVerticesPlanPosition, triangleCandidateShader, "verticesPlanPosition", kernelTriangleCandidate));
+        tempBuffers.Add(ComputeHelper.CreateAndSetBuffer(water.Mesh.triangles, triangleCandidateShader, "triangles", kernelTriangleCandidate));
+        triangleCandidateShader.SetInt("nbTriangles", water.Mesh.triangles.Length / 3);
+
+        // ComputeHelper.Release(tempBuffers.ToArray());
 
         meshReady = true;
     }
@@ -253,6 +296,17 @@ public class Boat : MonoBehaviour
                 }
             }
         }
+
+        //Remove cells with no potential
+        List<Cell> newCells = new List<Cell>();
+        foreach (Cell cell in gridCells)
+        {
+            if (cell.HasCandidatePotential)
+            {
+                newCells.Add(cell);
+            }
+        }
+        gridCells = newCells.ToArray();
     }
     #endregion
 
@@ -263,7 +317,7 @@ public class Boat : MonoBehaviour
         //Assign water triangles to boat bounding boxes
         Vector3[] vertices = water.Mesh.vertices;
         int[] triangles = water.Mesh.triangles;
-        HashSet<int> candidateCellsHS = new HashSet<int>();
+        List<int> candidateCells = new List<int>();
 
         foreach (Cell cell in gridCells)
         {
@@ -291,7 +345,7 @@ public class Boat : MonoBehaviour
                 if (gridCells[j].HasCandidatePotential && gridCells[j].Intersects(triangleBoundingbox))
                 {
                     gridCells[j].AddSet2(waterTriangleNeighbors[i / 3]);
-                    candidateCellsHS.Add(j);
+                    candidateCells.Add(j);
                 }
             }
         }
@@ -299,8 +353,6 @@ public class Boat : MonoBehaviour
         HashSet<Triangle> triangleCandidateBoatHS = new HashSet<Triangle>(meshFilter.mesh.triangles.Length / 3);
         HashSet<Triangle> triangleCandidateWaterHS = new HashSet<Triangle>(triangles.Length / 3);
 
-        int[] candidateCells = new int[candidateCellsHS.Count];
-        candidateCellsHS.CopyTo(candidateCells);
         foreach (int cellIndex in candidateCells)
         {
             triangleCandidateBoatHS.UnionWith(gridCells[cellIndex].TriangleSet1);
@@ -312,7 +364,58 @@ public class Boat : MonoBehaviour
         triangleCandidateWater = new Triangle[triangleCandidateWaterHS.Count];
         triangleCandidateWaterHS.CopyTo(triangleCandidateWater);
 
-        return candidateCells;
+        return candidateCells.ToArray();
+    }
+
+    private int[] FindTriangleCandidatesGPU()
+    {
+        //Set the frame data
+        int triangleCount = water.Mesh.triangles.Length / 3;
+        ComputeBuffer tempBuffer = ComputeHelper.CreateAndSetBuffer(water.HeightMap, triangleCandidateShader, "verticesHeightMap", kernelTriangleCandidate);
+        ComputeBuffer bufferNbTriangleIntersects = ComputeHelper.CreateAndSetBuffer<int>(gridCells.Length, triangleCandidateShader, "nbTriangleIntersects", kernelTriangleCandidate);
+        ComputeBuffer bufferTriangleIntersects = ComputeHelper.CreateAndSetBuffer<int>(triangleCount * gridCells.Length, triangleCandidateShader, "triangleIntersects", kernelTriangleCandidate);
+
+        Matrix4x4 transformation = transform.worldToLocalMatrix * water.transform.localToWorldMatrix;
+        triangleCandidateShader.SetMatrix("transformationMatrix", transformation);
+
+        ComputeHelper.Run(triangleCandidateShader, gridCells.Length, 1, 1, kernelTriangleCandidate);
+
+        int[] nbTriangleIntersects = new int[gridCells.Length];
+        bufferNbTriangleIntersects.GetData(nbTriangleIntersects);
+        bufferNbTriangleIntersects.Dispose();
+
+        int[] triangleIntersects = new int[gridCells.Length * triangleCount];
+        bufferTriangleIntersects.GetData(triangleIntersects);
+        bufferTriangleIntersects.Dispose();
+
+        tempBuffer.Dispose();
+
+        HashSet<Triangle> triangleCandidateBoatHS = new HashSet<Triangle>(meshFilter.mesh.triangles.Length / 3);
+        List<Triangle> triangleCandidateWaterList = new List<Triangle>(triangleCount);
+
+
+        List<int> cellsWithPotential = new List<int>();
+        for (int i = 0; i < gridCells.Length; i++)
+        {
+            gridCells[i].resetSet2();
+            if (nbTriangleIntersects[i] > 0)
+            {
+                cellsWithPotential.Add(i);
+                triangleCandidateBoatHS.UnionWith(gridCells[i].TriangleSet1);
+                for (int j = 0; j < nbTriangleIntersects[i]; j++)
+                {
+                    Triangle triangle = waterTriangleNeighbors[triangleIntersects[i * triangleCount + j]];
+                    gridCells[i].AddSet2(triangle);
+                    triangleCandidateWaterList.Add(triangle);
+                }
+            }
+        }
+
+        triangleCandidateBoat = new Triangle[triangleCandidateBoatHS.Count];
+        triangleCandidateBoatHS.CopyTo(triangleCandidateBoat);
+        triangleCandidateWater = triangleCandidateWaterList.ToArray();
+
+        return cellsWithPotential.ToArray();
     }
 
     private void ComputeIntersectingLine(int[] cellCandidates)
@@ -580,7 +683,7 @@ public class Boat : MonoBehaviour
         return array;
     }
 
-    private float TriangleHeight(Triangle triangle)
+    private float TriangleHeight(Triangle triangle) //Find vertical position of triangle
     {
         return PointHeight(transform.TransformPoint((triangle.Vertex1 + triangle.Vertex2 + triangle.Vertex3) / 3f));
     }
@@ -603,12 +706,12 @@ public class Boat : MonoBehaviour
     private void ApplyBuoyancy(Triangle[] bottomHalf, Triangle[] trianglesSea)
     {
 
-        (Vector3 barycentreBoat, float volumeBoat) = MeshHelper.ComputeVolumeAndBarycentre(bottomHalf);
-        (Vector3 barycentreSea, float volumeSea) = MeshHelper.ComputeVolumeAndBarycentre(trianglesSea);
+        (Vector3 barycentreBoat, float volumeBoat) = MeshHelper.ComputeVolumeAndBarycentre(bottomHalf, transform, transform.position);
+        (Vector3 barycentreSea, float volumeSea) = MeshHelper.ComputeVolumeAndBarycentre(trianglesSea, transform.position);
 
-        newBarycentre = transform.TransformPoint(barycentreBoat + barycentreSea);
+        newBarycentre = transform.InverseTransformPoint((barycentreBoat * volumeBoat + barycentreSea * volumeSea) / (volumeBoat + volumeSea));
 
-        rigidbody.AddForceAtPosition((volumeSea + volumeBoat) * 1000 * 9.81f * Vector3.up, newBarycentre);
+        rigidbody.AddForceAtPosition((volumeSea + volumeBoat) * 1000 * 9.81f * waterIntersectionNormal, newBarycentre);
     }
 
 
@@ -621,6 +724,7 @@ public class Boat : MonoBehaviour
     {
         if (showStatValues)
         {
+            Gizmos.color = Color.red;
             Gizmos.DrawSphere(transform.TransformPoint(barycentre), 0.1f);
         }
 
@@ -635,7 +739,7 @@ public class Boat : MonoBehaviour
             }
 
         }
-        if (lowerChain.Count > 0 && showLowerChain)
+        if (lowerChain?.Count > 0 && showLowerChain)
         {
             Gizmos.color = Color.black;
             Gizmos.DrawSphere(transform.TransformPoint(lowerChain[0]), 0.01f);
@@ -645,16 +749,13 @@ public class Boat : MonoBehaviour
             }
 
         }
-        // if (projectedVertices != null)
-        // {
-        //     foreach (Vector3 item in projectedVertices)
-        //     {
-        //         Gizmos.DrawSphere(transform.TransformPoint(item), 0.01f);
-        //     }
-        // }
 
-        Gizmos.color = Color.cyan;
-        Gizmos.DrawSphere(newBarycentre, 0.1f);
+        if (showImmersedBarycentre)
+        {
+            Gizmos.color = Color.red;
+            Gizmos.DrawSphere(transform.TransformPoint(newBarycentre), 0.1f);
+        }
+
     }
 
     void DrawTriangleHelper(int i, Mesh mesh, Color color)
