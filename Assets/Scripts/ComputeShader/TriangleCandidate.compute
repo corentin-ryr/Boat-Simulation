@@ -73,10 +73,5 @@ void FindTriangleCandidate (uint id : SV_DispatchThreadID)
             nbTriangleIntersects[id] += 1;
         }
 
-        //Debug
-        // if (id == 0) {
-        //     cellPositions[j] = trianglePosition;
-        // }
-
     }
 }
