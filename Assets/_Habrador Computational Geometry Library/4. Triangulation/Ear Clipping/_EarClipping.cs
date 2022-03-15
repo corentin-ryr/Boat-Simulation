@@ -28,18 +28,11 @@ namespace Habrador_Computational_Geometry
                 return null;
             }
 
-           
-
-
             //Step -1. Merge the holes with the points on the hull into one big polygon with invisible edges between the holes and the hull
             if (allHoleVertices != null && allHoleVertices.Count > 0)
             {
                 vertices = EarClippingHoleMethods.MergeHolesWithHull(vertices, allHoleVertices);
             }
-
-
-            //TestAlgorithmsHelpMethods.DebugDrawCircle(vertices[29].ToVector3(1f), 0.3f, Color.red);
-
 
             //Step 0. Create a linked list connecting all vertices with each other which will make the calculations easier and faster
             List<LinkedVertex> verticesLinked = new List<LinkedVertex>();
@@ -60,10 +53,6 @@ namespace Habrador_Computational_Geometry
                 v.nextLinkedVertex = verticesLinked[MathUtility.ClampListIndex(i + 1, verticesLinked.Count)];
             }
 
-            //Debug.Log("Number of vertices: " + CountLinkedVertices(verticesLinked[0]));
-            
-
-
             //Step 1. Find:
             //- Convex vertices (interior angle smaller than 180 degrees)
             //- Reflect vertices (interior angle greater than 180 degrees) so should maybe be called concave vertices?
@@ -73,7 +62,7 @@ namespace Habrador_Computational_Geometry
             HashSet<LinkedVertex> reflectVerts = new HashSet<LinkedVertex>();
 
             foreach (LinkedVertex v in verticesLinked)
-            {            
+            {
                 bool isConvex = IsVertexConvex(v);
 
                 if (isConvex)
@@ -86,8 +75,6 @@ namespace Habrador_Computational_Geometry
                 }
             }
 
-
-
             //Step 2. Find the initial ears
             HashSet<LinkedVertex> earVerts = new HashSet<LinkedVertex>();
 
@@ -95,17 +82,8 @@ namespace Habrador_Computational_Geometry
             foreach (LinkedVertex v in convexVerts)
             {
                 //And we only need to test the reflect vertices
-                if (IsVertexEar(v, reflectVerts))
-                {
-                    earVerts.Add(v);
-                }
+                if (IsVertexEar(v, reflectVerts)) earVerts.Add(v);
             }
-
-
-            //Debug
-            //DisplayVertices(earVertices);
-
-
 
             //Step 3. Build the triangles
             HashSet<Triangle2> triangulation = new HashSet<Triangle2>();
@@ -116,7 +94,6 @@ namespace Habrador_Computational_Geometry
 
             //Because we use a while loop, having an extra safety is always good so we dont get stuck in infinite loop
             int safety = 0;
-
             while (true)
             {
                 //Pick an ear vertex and form a triangle
@@ -125,7 +102,6 @@ namespace Habrador_Computational_Geometry
                 if (ear == null)
                 {
                     Debug.Log("Cant find ear");
-
                     break;
                 }
 
@@ -137,25 +113,18 @@ namespace Habrador_Computational_Geometry
                 //Try to flip this triangle according to Delaunay triangulation
                 if (optimizeTriangles)
                 {
-                    OptimizeTriangle(t, triangulation);    
+                    OptimizeTriangle(t, triangulation);
                 }
                 else
                 {
                     triangulation.Add(t);
                 }
 
-                
-
                 //Check if we have found all triangles
                 //This should also prevent us from getting stuck in an infinite loop
-                if (triangulation.Count >= maxTriangles)
-                {
-                    break;
-                }
-
+                if (triangulation.Count >= maxTriangles) break;
 
                 //If we havent found all triangles we have to reconfigure the data structure
-
                 //Remove the ear we used to build a triangle
                 convexVerts.Remove(ear);
                 earVerts.Remove(ear);
@@ -168,33 +137,13 @@ namespace Habrador_Computational_Geometry
                 ReconfigureAdjacentVertex(v_prev, convexVerts, reflectVerts, earVerts);
                 ReconfigureAdjacentVertex(v_next, convexVerts, reflectVerts, earVerts);
 
-
-                //if (safety > 4)
-                //{
-                //    Debug.Log(earVerts.Count);
-
-                //    Debug.DrawLine(v_next.pos.ToVector3(), Vector3.zero, Color.blue, 3f);
-
-                //    //Debug.Log(IsVertexEar(v_next, reflectVerts));
-
-                //    Debug.Log(earVerts.Contains(v_next));
-
-                //    break;
-                //}
-
-
-
                 safety += 1;
-
                 if (safety > 50000)
                 {
                     Debug.Log("Ear Clipping is stuck in an infinite loop!");
-
                     break;
                 }
             }
-
-
 
             //Step 4. Improve triangulation
             //Some triangles may be too sharp, and if you want a nice looking triangle, you should try to swap edges
@@ -202,7 +151,6 @@ namespace Habrador_Computational_Geometry
             //A report suggests that should be done while createing the triangulation
             //But maybe it's easier to do it afterwards with some standardized constrained Delaunay triangulation?
             //But that would also be stupid because then we could have used the constrained Delaunay from the beginning!
-
 
             return triangulation;
         }
@@ -359,7 +307,6 @@ namespace Habrador_Computational_Geometry
             if (optimizeTriangles)
             {
                 float smallestInteriorAngle = Mathf.Infinity;
-
                 foreach (LinkedVertex v in earVertices)
                 {
                     float interiorAngle = CalculateInteriorAngle(v);
@@ -367,7 +314,6 @@ namespace Habrador_Computational_Geometry
                     if (interiorAngle < smallestInteriorAngle)
                     {
                         bestEarVertex = v;
-
                         smallestInteriorAngle = interiorAngle;
                     }
                 }
@@ -378,15 +324,12 @@ namespace Habrador_Computational_Geometry
                 foreach (LinkedVertex v in earVertices)
                 {
                     bestEarVertex = v;
-
                     break;
                 }
             }
 
-
             return bestEarVertex;
         }
-
 
 
         //Is a vertex an ear?
@@ -412,12 +355,8 @@ namespace Habrador_Computational_Geometry
                 }
 
                 //If a relect vertex intersects with the triangle, then this vertex is not an ear
-                if (_Intersections.PointTriangle(t, test_p, includeBorder: true))
-                {
-                    return false;
-                }
+                if (_Intersections.PointTriangle(t, test_p, includeBorder: true)) return false;
             }
-
 
             //No vertex is intersecting with the triangle, so this vertex must be an ear
             return true;
@@ -439,17 +378,6 @@ namespace Habrador_Computational_Geometry
         {
             float interiorAngle = CalculateInteriorAngle(p_prev, p, p_next);
 
-            /*
-            //Colinear point (pi = 180 degrees)
-            if (Mathf.Abs(interiorAngle - Mathf.PI) <= MathUtility.EPSILON)
-            {
-                //Is it concave or convex? God knows!
-                //According to a paper, the vertex is convex if the interior angle is less than 180 degrees
-                //One can remove them if they cause trouble (the triangulation will still fill the area)
-                //And maybe add them back at the end by splitting triangles
-                return false;
-            }
-            */
             //Convex
             if (interiorAngle < Mathf.PI)
             {
@@ -461,8 +389,6 @@ namespace Habrador_Computational_Geometry
                 return false;
             }
         }
-
-
 
         //Get interior angle (the angle within the polygon) of a vertex
         private static float CalculateInteriorAngle(LinkedVertex v)
@@ -491,37 +417,27 @@ namespace Habrador_Computational_Geometry
             return interiorAngle;
         }
 
-
-
         //Count vertices that are linked to each other in a looping way
         private static int CountLinkedVertices(LinkedVertex startVertex)
         {
             int counter = 1;
-
             LinkedVertex currentVertex = startVertex;
-
             while (true)
             {
                 currentVertex = currentVertex.nextLinkedVertex;
-            
-                if (currentVertex == startVertex)
-                {
-                    break;
-                }
-            
+
+                if (currentVertex == startVertex) break;
+
                 counter += 1;
-            
                 if (counter > 50000)
                 {
                     Debug.Log("Stuck in infinite loop!");
-
                     break;
                 }
             }
 
             return counter;
         }
-
 
 
         //Debug stuff

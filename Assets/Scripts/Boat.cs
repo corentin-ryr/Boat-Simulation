@@ -16,9 +16,9 @@ public class Boat : MonoBehaviour
 
     //Internal variables of the mesh
     float volume;
+    float newVolume;
     Vector3 barycentre;
     Vector3 newBarycentre;
-
     bool meshReady; //Set after the event
 
     //Data structures and vectors (global for optimization purposes)
@@ -27,7 +27,6 @@ public class Boat : MonoBehaviour
     Cell[] gridCells;
     Triangle[] triangleCandidateBoat;
     List<Triangle> triangleCandidateWater;
-    Vector3[] projectedVertices;
 
     List<Vector3> chain;
     List<Vector3> lowerChain;
@@ -69,6 +68,7 @@ public class Boat : MonoBehaviour
     public bool showWaterNormal;
     public bool showWaterAboveCheck;
     public bool showImmersedBarycentre;
+    public bool showBelowWaterPoints;
 
 
 
@@ -119,8 +119,10 @@ public class Boat : MonoBehaviour
 
         if (showStatValues) //Used to check if the volume and barycentre computation is working well
         {
-            UnityEngine.Debug.Log(volume);
-            UnityEngine.Debug.Log(barycentre);
+            UnityEngine.Debug.Log("Full volume " + volume);
+            UnityEngine.Debug.Log("Geometric center of the boat " + barycentre);
+            UnityEngine.Debug.Log("Immersed volume " + newVolume);
+            UnityEngine.Debug.Log("Geometric center of the immersed part " + newBarycentre);
         }
 
         if (showBackgroundGrid)
@@ -188,6 +190,9 @@ public class Boat : MonoBehaviour
         Triangle[] bottomHalf = FindBottomHalfOfBoat();
         if (bottomHalf.Length == 0) return;
 
+        //Triangulating intermediate between lower and intersection line
+        // Triangle[] intermediate = TriangulateIntermediate();
+
         //We triangulate the sea (we just create a plane with the circle)
         List<Triangle> seaTriangulated = new List<Triangle>();
         for (int i = 0; i < chain.Count - 1; i++)
@@ -204,7 +209,6 @@ public class Boat : MonoBehaviour
         //Apply the forces
         ApplyBuoyancy(bottomHalf, seaTriangulated.ToArray());
     }
-
 
     #region Precomputations ======================================================================================
     private void MeshDataPrecomputation() //Executing once the mesh has been created
@@ -392,6 +396,7 @@ public class Boat : MonoBehaviour
         return cellsWithPotential.ToArray();
     }
 
+    Dictionary<Triangle, List<Vector3>> polygons = new Dictionary<Triangle, List<Vector3>>();
     private bool ComputeIntersectingLine(int[] cellCandidates)
     {
         chain.Clear();
@@ -399,9 +404,10 @@ public class Boat : MonoBehaviour
         //Find first intersection
         bool swaped = false;
         Triangle currentTriangle;
-        Triangle triangleToCheck = null;
+        Triangle triangleToCheckAgainst = null;
         Vector3 currentP = Vector3.positiveInfinity;
         Triangle[] nextCurrentTriangles = new Triangle[0];
+        int currentCase;
 
         foreach (int cellIndex in cellCandidates)
         {
@@ -410,13 +416,13 @@ public class Boat : MonoBehaviour
             {
                 foreach (Triangle triangleSet1 in cell.TriangleSet1)
                 {
-                    bool worked = false;
-                    (worked, nextCurrentTriangles) = IdentifyCase(triangleSet1, meshFilter.mesh, triangleSet2, water.Mesh, ref currentP, ref swaped, ref triangleToCheck);
-                    if (worked)
+                    (currentCase, nextCurrentTriangles) = IdentifyCase(triangleSet1, meshFilter.mesh, triangleSet2, water.Mesh, ref currentP, ref swaped, ref triangleToCheckAgainst);
+                    if (currentCase > 0)
                     {
-                        currentTriangle = triangleSet1;
-                        triangleToCheck = triangleSet2;
                         chain.Add(currentP);
+
+                        //Polygon creation
+                        // polygons.Add()
                         goto End;
                     }
                 }
@@ -434,13 +440,14 @@ public class Boat : MonoBehaviour
             foreach (Triangle nextCurrentTriangle in nextCurrentTriangles) //Normally only one triangle in this array but if we have cases 3 or 4 we can have 0 or more than 1 triangles.
             {
                 currentTriangle = nextCurrentTriangle;
-                (loopContiue, nextCurrentTriangles) = IdentifyCase(currentTriangle, swaped ? water.Mesh : meshFilter.mesh, triangleToCheck,
-                                                                    swaped ? meshFilter.mesh : water.Mesh, ref currentP, ref swaped, ref triangleToCheck);
-                if (loopContiue)
+                (currentCase, nextCurrentTriangles) = IdentifyCase(currentTriangle, swaped ? water.Mesh : meshFilter.mesh, triangleToCheckAgainst,
+                                                                    swaped ? meshFilter.mesh : water.Mesh, ref currentP, ref swaped, ref triangleToCheckAgainst);
+                if (currentCase > 0)
                 {
                     chain.Add(currentP);
                     break;
                 }
+                else loopContiue = false;
                 UnityEngine.Debug.Log("No intersection");
                 return false;
             }
@@ -454,7 +461,7 @@ public class Boat : MonoBehaviour
 
     //Triangle1 is from the boat and triangle2 is from the water
     //TODO compute cases 3 and 4
-    private (bool, Triangle[]) IdentifyCase(Triangle triangle1, Mesh mesh1, Triangle triangle2, Mesh mesh2, ref Vector3 P, ref bool swaped, ref Triangle triangleToCheck)
+    private (int, Triangle[]) IdentifyCase(Triangle triangle1, Mesh mesh1, Triangle triangle2, Mesh mesh2, ref Vector3 P, ref bool swaped, ref Triangle triangleToCheckAgainst)
     {
         Matrix4x4 transformation = mesh1 == meshFilter.mesh ? transform.localToWorldMatrix : water.transform.localToWorldMatrix;
         a = transformation.MultiplyPoint3x4(triangle1.Vertex1);
@@ -510,25 +517,27 @@ public class Boat : MonoBehaviour
 
         if (case1 && case2 && tempP1 == tempP2) //Case when we have the point on the edge of the two triangles. The next triangle to check 
         {
-            triangleToCheck = swaped ? triangleIndicesToCheck2[0] : triangleIndicesToCheck2[0];
+            // triangleToCheck = swaped ? triangleIndicesToCheck2[0] : triangleIndicesToCheck1[0];
+            triangleToCheckAgainst = triangleIndicesToCheck2[0];
             swaped = !swaped;
             P = tempP1;
-            return (true, triangleIndicesToCheck1); //We act like a case 1 but we have a special triangleToCheck
+            return (1, triangleIndicesToCheck1); //We act like a case 1 but we have a special triangleToCheck
         }
         else if (case1) //Case 1, we have to swap and we set the triangle to check next
         {
             swaped = !swaped;
-            triangleToCheck = triangle1;
+            triangleToCheckAgainst = triangle1;
             P = tempP1;
-            return (true, triangleIndicesToCheck1);
+            return (1, triangleIndicesToCheck1);
         }
         else if (case2)//Case 2, we don't swap and we also set the next triangle to check
         {
             P = tempP2;
-            return (true, triangleIndicesToCheck2);
+            triangleToCheckAgainst = triangle2;
+            return (2, triangleIndicesToCheck2);
         }
 
-        return (false, triangleIndicesToCheck1);
+        return (0, triangleIndicesToCheck1);
     }
 
     private bool IntersectionEdgeTriangle(Vector3 a, Vector3 b, Vector3 c, Vector3 d, Vector3 e, ref Vector3 newP, Vector3 previousP)
@@ -559,20 +568,25 @@ public class Boat : MonoBehaviour
     #endregion
 
     #region Triangulate the mesh =================================================================================
+
     private Triangle[] FindBottomHalfOfBoat()
     {
-        HashSet<Triangle> bottomHalf = new HashSet<Triangle>();
+        float waterSurfaceDepth = PointHeight(averageWaterPosition);
 
-        bool stillInCandidates = true;
+        HashSet<Triangle> bottomHalf = new HashSet<Triangle>();
+        lowerChain.Clear();
+
+        //Find a point underwater
         Triangle currentTriangle = triangleCandidateBoat[0];
-        float minDepth = TriangleHeight(currentTriangle);
-        while (stillInCandidates)
+        float minDepth = float.MaxValue;
+        while (minDepth > waterSurfaceDepth)
         {
+            minDepth = MaxTriangleHeight(currentTriangle);
             float previousDepth = minDepth;
             //Get the neighbor further down
             foreach (Triangle neighbor in currentTriangle.GetNeighbors())
             {
-                float depth = TriangleHeight(neighbor);
+                float depth = MaxTriangleHeight(neighbor);
                 if (depth < minDepth)
                 {
                     currentTriangle = neighbor;
@@ -580,29 +594,33 @@ public class Boat : MonoBehaviour
                 }
             }
 
-            if (!(new List<Triangle>(triangleCandidateBoat).Contains(currentTriangle)) || previousDepth == minDepth)
-            {
-                stillInCandidates = false;
-            }
+            if (previousDepth == minDepth) break;
         }
 
-        //We get all the triangle by graph traversal (BFS)
+        if (MaxTriangleHeight(currentTriangle) > waterSurfaceDepth) throw new Exception("No triangle underwater");
+
+
+        //We have an initial triangle underwater
         Queue<Triangle> Q = new Queue<Triangle>();
         Q.Enqueue(currentTriangle);
         bottomHalf.Add(currentTriangle);
-        float waterSurfaceDepth = PointHeight(averageWaterPosition);
 
         while (Q.Count > 0)
         {
             currentTriangle = Q.Dequeue();
             foreach (Triangle neighbor in currentTriangle.GetNeighbors())
             {
-                if (MaxTriangleHeight(neighbor) < waterSurfaceDepth && bottomHalf.Add(neighbor))
+                if (MaxTriangleHeight(neighbor) < waterSurfaceDepth)
                 {
-                    Q.Enqueue(neighbor);
+                    if (bottomHalf.Add(neighbor)) Q.Enqueue(neighbor);
+                }
+                else
+                {
+                    lowerChain.AddRange(currentTriangle.GetVertices().Intersect(neighbor.GetVertices()));
                 }
             }
         }
+
         return bottomHalf.ToArray();
     }
 
@@ -617,6 +635,18 @@ public class Boat : MonoBehaviour
                         PointHeight(transform.TransformPoint(triangle.Vertex2))),
                         PointHeight(transform.TransformPoint(triangle.Vertex3)));
     }
+    private (float, Vector3) MinTriangleHeight(Triangle triangle)
+    {
+        List<float> heightValues = new List<float>();
+        heightValues.Add(PointHeight(transform.TransformPoint(triangle.Vertex1)));
+        heightValues.Add(PointHeight(transform.TransformPoint(triangle.Vertex2)));
+        heightValues.Add(PointHeight(transform.TransformPoint(triangle.Vertex3)));
+
+        float minHeight = heightValues.Min();
+        int index = heightValues.IndexOf(minHeight);
+
+        return (minHeight, triangle.GetVertices()[index]);
+    }
 
     /// <summary>
     ///     Compute the height of the point projected on the water normal 
@@ -626,6 +656,12 @@ public class Boat : MonoBehaviour
     private float PointHeight(Vector3 point)
     {
         return Vector3.Dot(point, waterIntersectionNormal);
+    }
+
+
+    private Triangle[] TriangulateIntermediate()
+    {
+        throw new NotImplementedException();
     }
 
     #endregion
@@ -638,6 +674,7 @@ public class Boat : MonoBehaviour
         (Vector3 barycentreSea, float volumeSea) = MeshHelper.ComputeVolumeAndBarycentre(trianglesSea, transform.position);
 
         newBarycentre = transform.InverseTransformPoint((barycentreBoat * volumeBoat + barycentreSea * volumeSea) / (volumeBoat + volumeSea));
+        newVolume = volumeSea + volumeBoat;
 
         rigidbody.AddForceAtPosition((volumeSea + volumeBoat) * 1000 * 9.81f * waterIntersectionNormal, newBarycentre);
     }
@@ -673,7 +710,7 @@ public class Boat : MonoBehaviour
             Gizmos.DrawSphere(transform.TransformPoint(lowerChain[0]), 0.01f);
             for (int i = 0; i < lowerChain.Count - 1; i++)
             {
-                Gizmos.DrawSphere(transform.TransformPoint(lowerChain[i + 1]), 0.01f);
+                Gizmos.DrawSphere(transform.TransformPoint(lowerChain[i + 1]), 0.05f);
             }
 
         }
@@ -682,6 +719,20 @@ public class Boat : MonoBehaviour
         {
             Gizmos.color = Color.red;
             Gizmos.DrawSphere(transform.TransformPoint(newBarycentre), 0.1f);
+        }
+
+        if (showBelowWaterPoints && meshFilter)
+        {
+            Gizmos.color = Color.red;
+            Gizmos.DrawSphere(averageWaterPosition, 0.1f);
+            foreach (Vector3 vertex in meshFilter.mesh.vertices)
+            {
+                if (PointHeight(transform.TransformPoint(vertex)) < PointHeight(averageWaterPosition))
+                {
+                    Gizmos.color = Color.blue;
+                    Gizmos.DrawSphere(transform.TransformPoint(vertex), 0.01f);
+                }
+            }
         }
 
     }

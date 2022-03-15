@@ -18,13 +18,14 @@ public class Triangle
 
     //The 3 vertices of the triangle
     private Vector3 vertex1;
-    public Vector3 Vertex1 { get => vertex1; set => vertex1 = value; }
-    public void SetVertex1Height(float height) { this.vertex1.y = height; }
     private Vector3 vertex2;
-    public Vector3 Vertex2 { get => vertex2; set => vertex2 = value; }
-    public void SetVertex2Height(float height) { this.vertex2.y = height; }
     private Vector3 vertex3;
+
+    public Vector3 Vertex1 { get => vertex1; set => vertex1 = value; }
+    public Vector3 Vertex2 { get => vertex2; set => vertex2 = value; }
     public Vector3 Vertex3 { get => vertex3; set => vertex3 = value; }
+    public void SetVertex1Height(float height) { this.vertex1.y = height; }
+    public void SetVertex2Height(float height) { this.vertex2.y = height; }
     public void SetVertex3Height(float height) { this.vertex3.y = height; }
     public Vector3[] GetVertices()
     {
