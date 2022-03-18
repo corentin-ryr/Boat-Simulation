@@ -2,7 +2,9 @@
 
 This is a simulation of the buoyancy on mesh objects. This method is applicable to any mesh to simulate a floating behaviour. This method works for a moving water surface.
 
-![Ball floating](Images/intro.gif)
+<p align="center">
+    <img src="Images/Intro.gif" >
+</p>
 
 # The method
 
@@ -21,9 +23,9 @@ From this chain, we can get the triangles of the floating mesh that are bellow t
 </p>
 We then compute the goemetric center and the volume of the intersection mesh [2].
 
-
 # Performances
-This algorithm is more computationaly expensive than some simpler approximations. To improve performance, part of the algorithm is parralelized on the GPU. With the sphere and 20*20 water, it runs at 30fps in the Unity Editor.
+
+This algorithm is more computationaly expensive than some simpler approximations. To improve performance, part of the algorithm is parralelized on the GPU. With the sphere and 20\*20 water, it runs at 30fps in the Unity Editor.
 
 # References
 
