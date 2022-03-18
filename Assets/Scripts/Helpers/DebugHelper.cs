@@ -41,17 +41,17 @@ public static class DebugHelper
     public static void ShowMesh(Triangle[] triangles, Transform transform, Color color)
     {
         Debug.Log("Number of candidates: " + triangles.Length);
-        Vector3[] debugVertices = new Vector3[triangles.Length * 3];
-        Matrix4x4 transformation = transform.localToWorldMatrix;
         for (int i = 0; i < triangles.Length; i++)
         {
-            debugVertices[i * 3] = transformation.MultiplyPoint3x4(triangles[i].Vertex1);
-            debugVertices[i * 3 + 1] = transformation.MultiplyPoint3x4(triangles[i].Vertex2);
-            debugVertices[i * 3 + 2] = transformation.MultiplyPoint3x4(triangles[i].Vertex3);
+            Vector3 vertex0 = transform.TransformPoint(triangles[i].Vertex1);
+            Vector3 vertex1 = transform.TransformPoint(triangles[i].Vertex2);
+            Vector3 vertex2 = transform.TransformPoint(triangles[i].Vertex3);
 
-            Debug.DrawLine(debugVertices[i * 3], debugVertices[i * 3 + 1], color);
-            Debug.DrawLine(debugVertices[i * 3 + 1], debugVertices[i * 3 + 2], color);
-            Debug.DrawLine(debugVertices[i * 3 + 2], debugVertices[i * 3], color);
+            Debug.DrawLine(vertex0, vertex1, color);
+            Debug.DrawLine(vertex1, vertex2, color);
+            Debug.DrawLine(vertex2, vertex0, color);
+
+            Debug.DrawLine(transform.position, (vertex0 + vertex1 + vertex2) / 3f, Color.black);
         }
     }
     public static void ShowMesh(Triangle[] triangles, Color color)

@@ -94,6 +94,36 @@ public struct Cell
     }
 }
 
+public struct MovingAverage
+{
+    private List<Vector3> lastFewPoints;
+    private int MANumber;
+    public MovingAverage(int MANumber)
+    {
+        lastFewPoints = new List<Vector3>(MANumber);
+        this.MANumber = MANumber;
+    }
+
+    public Vector3 GetSmoothedValue(Vector3 newValue)
+    {
+        if (lastFewPoints.Count < MANumber)
+        {
+            lastFewPoints.Add(newValue);
+        }
+        else
+        {
+            lastFewPoints.RemoveAt(0);
+            lastFewPoints.Add(newValue);
+        }
+
+        return new Vector3(
+            lastFewPoints.Average(x => x.x),
+            lastFewPoints.Average(x => x.y),
+            lastFewPoints.Average(x => x.z)
+        );
+    }
+}
+
 public static class MeshHelper
 {
 
@@ -157,7 +187,7 @@ public static class MeshHelper
     }
 
     //Only tried on sphere (not on concave forms)
-    public static (Vector3, float) ComputeVolumeAndBarycentre(Vector3[] vertices, int[] triangles)
+    public static (Vector3, float) ComputeVolumeAndBarycentre(Vector3[] vertices, int[] triangles, Transform transform)
     {
         float volume = 0f;
         Vector3 barycentre = Vector3.zero;
@@ -167,11 +197,14 @@ public static class MeshHelper
         {
             Vector3 tempCrossProd = Vector3.Cross(vertices[triangles[i]] - vertices[triangles[i + 2]], vertices[triangles[i + 1]] - vertices[triangles[i + 2]]);
 
-            float tetraVolume = Mathf.Abs(Vector3.Dot(-vertices[triangles[i + 2]], tempCrossProd)) / 6f;
+            float tetraVolume = Mathf.Abs(Vector3.Dot(vertices[triangles[i]], Vector3.Cross(vertices[triangles[i + 1]], vertices[triangles[i + 2]]))) / 6f;
             Vector3 tetraCentroid = (vertices[triangles[i]] + vertices[triangles[i + 1]] + vertices[triangles[i + 2]]) * tetraVolume * 0.25f;
 
             Vector3 normal = Vector3.Cross(vertices[triangles[i + 1]] - vertices[triangles[i]], vertices[triangles[i + 2]] - vertices[triangles[i]]);
             float faceSign = Mathf.Sign(Vector3.Dot(normal, vertices[triangles[i]]));
+
+            Debug.DrawRay(transform.TransformPoint((vertices[triangles[i]] + vertices[triangles[i + 2]] + vertices[triangles[i + 2]]) / 3f), normal);
+
 
             volume += faceSign * tetraVolume;
             barycentre += faceSign * tetraCentroid;
@@ -182,64 +215,60 @@ public static class MeshHelper
 
         return (barycentre, volume);
     }
-    public static (Vector3, float) ComputeVolumeAndBarycentre(Triangle[] triangles, Vector3 referencePoint)
+
+    public static (Vector3, float, Vector3, Vector3) ComputeVolumeAndBarycentre(Triangle[] triangles, Vector3 referencePoint, Matrix4x4 transformation, Vector3 linearSpeed, Vector3 angularSpeed, float C = 1f, float rho = 1000, float mu = 1E-3f)
     {
         float volume = 0f;
         Vector3 barycentre = Vector3.zero;
+        Vector3 linearDrag = Vector3.zero;
+        Vector3 angularDrag = Vector3.zero;
 
-
-        for (int i = 0; i < triangles.Length; i += 3)
+        for (int i = 0; i < triangles.Length; i++)
         {
-            Vector3 vertex1 = triangles[i].Vertex1 - referencePoint;
-            Vector3 vertex2 = triangles[i].Vertex2 - referencePoint;
-            Vector3 vertex3 = triangles[i].Vertex3 - referencePoint;
+            Vector3 vertex1 = transformation.MultiplyPoint3x4(triangles[i].Vertex1) - referencePoint;
+            Vector3 vertex2 = transformation.MultiplyPoint3x4(triangles[i].Vertex2) - referencePoint;
+            Vector3 vertex3 = transformation.MultiplyPoint3x4(triangles[i].Vertex3) - referencePoint;
+            Vector3 trianglePosition = (vertex1 + vertex2 + vertex3) / 3f;
 
-            Vector3 tempCrossProd = Vector3.Cross(vertex1 - vertex3, vertex2 - vertex3);
+            Vector3 normal = Vector3.Cross(vertex1 - vertex2, vertex1 - vertex3);
 
-            float tetraVolume = Mathf.Abs(Vector3.Dot(-vertex3, tempCrossProd)) / 6f;
+            float tetraVolume = Mathf.Abs(Vector3.Dot(vertex1, Vector3.Cross(vertex2, vertex3))) / 6f;
             Vector3 tetraCentroid = (vertex1 + vertex2 + vertex3) * tetraVolume * 0.25f;
 
-            Vector3 normal = Vector3.Cross(vertex2 - vertex1, vertex3 - vertex1);
             float faceSign = Mathf.Sign(Vector3.Dot(normal, vertex1));
 
             volume += faceSign * tetraVolume;
             barycentre += faceSign * tetraCentroid;
 
+            Vector3 speedAtTriangle = Vector3.Cross(angularSpeed, trianglePosition);//  / (trianglePosition.magnitude * trianglePosition.magnitude);
+
+            //Friction torque
+            float projectedSurfaceAngularSpeed = Vector3.Dot(normal, angularSpeed) > 0 ? ProjectedSurface(vertex1, vertex2, vertex3, speedAtTriangle) : 0;
+            angularDrag -= rho * 0.5f * speedAtTriangle.magnitude * speedAtTriangle.magnitude *
+                            projectedSurfaceAngularSpeed * trianglePosition.magnitude * angularSpeed.normalized * C;
+
+            //Shear stress
+            float projectedSurfaceShearStress = ProjectedSurface(vertex1, vertex2, vertex3, trianglePosition);
+            angularDrag -= projectedSurfaceShearStress * mu * angularSpeed * trianglePosition.magnitude;
+
+            //Linear friction drag
+            float projectedSurfaceLinearSpeed = Vector3.Dot(normal, linearSpeed) > 0 ? ProjectedSurface(vertex1, vertex2, vertex3, linearSpeed) : 0;
+            linearDrag -= rho * 0.5f * linearSpeed.magnitude * linearSpeed * projectedSurfaceLinearSpeed * C;
+
+            if (i == 1)
+            {
+                // Debug.Log("Speed at triangle " + speedAtTriangle.magnitude);
+                // Debug.Log("ProjectedSurface " + projectedSurfaceAngularSpeed);
+                // Debug.Log("Radius " + trianglePosition.magnitude);
+
+                // Debug.DrawLine(referencePoint, trianglePosition + referencePoint, Color.cyan);
+                // Debug.DrawRay(trianglePosition + referencePoint, speedAtTriangle.normalized, Color.red);
+                // Debug.DrawRay(referencePoint, -tempAngularDrag.normalized, Color.green);
+            }
         }
 
         barycentre /= volume;
-
-        return (barycentre + referencePoint, volume);
-    }
-
-    public static (Vector3, float) ComputeVolumeAndBarycentre(Triangle[] triangles, Transform transform, Vector3 referencePoint)
-    {
-        float volume = 0f;
-        Vector3 barycentre = Vector3.zero;
-
-
-        for (int i = 0; i < triangles.Length; i += 3)
-        {
-            Vector3 vertex1 = transform.TransformPoint(triangles[i].Vertex1) - referencePoint;
-            Vector3 vertex2 = transform.TransformPoint(triangles[i].Vertex2) - referencePoint;
-            Vector3 vertex3 = transform.TransformPoint(triangles[i].Vertex3) - referencePoint;
-
-            Vector3 tempCrossProd = Vector3.Cross(vertex1 - vertex3, vertex2 - vertex3);
-
-            float tetraVolume = Mathf.Abs(Vector3.Dot(-vertex3, tempCrossProd)) / 6f;
-            Vector3 tetraCentroid = (vertex1 + vertex2 + vertex3) * tetraVolume * 0.25f;
-
-            Vector3 normal = Vector3.Cross(vertex2 - vertex1, vertex3 - vertex1);
-            float faceSign = Mathf.Sign(Vector3.Dot(normal, vertex1));
-
-            volume += faceSign * tetraVolume;
-            barycentre += faceSign * tetraCentroid;
-
-        }
-
-        barycentre /= volume;
-
-        return (barycentre + referencePoint, volume);
+        return (barycentre + referencePoint, volume, linearDrag, angularDrag);
     }
 
     public static Mesh WeldVertices(Mesh aMesh, float aMaxDelta = 0.01f)
@@ -317,6 +346,15 @@ public static class MeshHelper
         }
 
         return (vertices, triangles, uvs);
+    }
+
+    private static float ProjectedSurface(Vector3 v1, Vector3 v2, Vector3 v3, Vector3 normal)
+    {
+        Vector3 vertex1Projected = v1 - Vector3.Dot(v1, normal.normalized) * normal.normalized;
+        Vector3 vertex2Projected = v2 - Vector3.Dot(v2, normal.normalized) * normal.normalized;
+        Vector3 vertex3Projected = v3 - Vector3.Dot(v3, normal.normalized) * normal.normalized;
+        return (Vector3.Cross(vertex1Projected - vertex2Projected, vertex1Projected - vertex3Projected)).magnitude / 2f;
+
     }
 
 }
