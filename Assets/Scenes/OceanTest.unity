@@ -38,7 +38,7 @@ RenderSettings:
   m_ReflectionIntensity: 1
   m_CustomReflection: {fileID: 0}
   m_Sun: {fileID: 0}
-  m_IndirectSpecularColor: {r: 0.44657898, g: 0.4964133, b: 0.5748178, a: 1}
+  m_IndirectSpecularColor: {r: 0.4414861, g: 0.48300523, b: 0.5307871, a: 1}
   m_UseRadianceAmbientProbe: 0
 --- !u!157 &3
 LightmapSettings:
@@ -195,7 +195,7 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 308106701}
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 6.9505153, y: 4.767591, z: 16.734644}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -373,14 +373,14 @@ Transform:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1593210534}
-  m_LocalRotation: {x: 0.40821788, y: -0.23456968, z: 0.10938163, w: 0.8754261}
+  m_LocalRotation: {x: 0.076600194, y: -0.18156475, z: 0.1844496, w: 0.9628837}
   m_LocalPosition: {x: 0, y: 3, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 0}
   m_RootOrder: 1
-  m_LocalEulerAnglesHint: {x: 50, y: -30, z: 0}
+  m_LocalEulerAnglesHint: {x: 12.386, y: -19.211, z: 19.584}
 --- !u!114 &1593210537
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -415,6 +415,7 @@ GameObject:
   - component: {fileID: 1659621576}
   - component: {fileID: 1659621575}
   - component: {fileID: 1659621574}
+  - component: {fileID: 1659621580}
   m_Layer: 0
   m_Name: Boat
   m_TagString: Untagged
@@ -434,25 +435,27 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 2b496ca18289d41cb8d00c23870ed2b5, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  water: {fileID: 0}
+  ocean: {fileID: 308106702}
   triangleCandidateShader: {fileID: 7200000, guid: 372daf9380936d6b8b751c357e9b0fbc,
     type: 3}
   cellMaxSize: {x: 0.2, y: 0.2, z: 0.2}
   procedurallyGeneratedMesh: 1
   centerOfMass: {x: 0, y: 0, z: 0}
   C: 1
+  waterGridWidth: 5
   showBackgroundGrid: 0
-  showStatValues: 0
+  showStatValues: 1
   showCandidatesBoat: 0
   showCandidatesWater: 0
   showIntersectionLine: 0
-  showIntersectionMesh: 0
+  showIntersectionMesh: 1
   showLowerChain: 0
   showWaterNormal: 0
   showWaterAboveCheck: 0
   showImmersedBarycentre: 0
   showBelowWaterPoints: 0
   showCenterOfMass: 0
+  showWaterMesh: 0
 --- !u!64 &1659621575
 MeshCollider:
   m_ObjectHideFlags: 0
@@ -464,7 +467,7 @@ MeshCollider:
   m_IsTrigger: 0
   m_Enabled: 1
   serializedVersion: 4
-  m_Convex: 0
+  m_Convex: 1
   m_CookingOptions: 30
   m_Mesh: {fileID: 0}
 --- !u!54 &1659621576
@@ -495,8 +498,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 7f3c1219ce1518cd48f8cd136482216f, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  computeShader: {fileID: 0}
-  nbSubdivision: 0
+  computeShader: {fileID: 7200000, guid: e3b06bf9a0a58405a8acf3497f425a86, type: 3}
+  nbSubdivision: 3
 --- !u!33 &1659621578
 MeshFilter:
   m_ObjectHideFlags: 0
@@ -513,10 +516,52 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1659621573}
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 6.9505153, y: 4.767591, z: 16.734644}
+  m_LocalPosition: {x: 0, y: 0.952, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 0}
   m_RootOrder: 3
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!23 &1659621580
+MeshRenderer:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1659621573}
+  m_Enabled: 1
+  m_CastShadows: 1
+  m_ReceiveShadows: 1
+  m_DynamicOccludee: 1
+  m_StaticShadowCaster: 0
+  m_MotionVectors: 1
+  m_LightProbeUsage: 1
+  m_ReflectionProbeUsage: 1
+  m_RayTracingMode: 2
+  m_RayTraceProcedural: 0
+  m_RenderingLayerMask: 1
+  m_RendererPriority: 0
+  m_Materials:
+  - {fileID: -3033667219593020291, guid: 7baa8045d4df289a7b636b0e443d686d, type: 3}
+  m_StaticBatchInfo:
+    firstSubMesh: 0
+    subMeshCount: 0
+  m_StaticBatchRoot: {fileID: 0}
+  m_ProbeAnchor: {fileID: 0}
+  m_LightProbeVolumeOverride: {fileID: 0}
+  m_ScaleInLightmap: 1
+  m_ReceiveGI: 1
+  m_PreserveUVs: 0
+  m_IgnoreNormalsForChartDetection: 0
+  m_ImportantGI: 0
+  m_StitchLightmapSeams: 1
+  m_SelectedEditorRenderState: 3
+  m_MinimumChartSize: 4
+  m_AutoUVMaxDistance: 0.5
+  m_AutoUVMaxAngle: 89
+  m_LightmapParameters: {fileID: 0}
+  m_SortingLayerID: 0
+  m_SortingLayer: 0
+  m_SortingOrder: 0
+  m_AdditionalVertexStreams: {fileID: 0}

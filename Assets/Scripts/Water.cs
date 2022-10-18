@@ -33,7 +33,7 @@ public class Water : MonoBehaviour
     {
         meshFilter = GetComponent<MeshFilter>();
 
-        (Vector3[] vertices, int[] triangles, Vector2[] uvs) = MeshHelper.GenerateGridMesh(20, 20);
+        (Vector3[] vertices, int[] triangles, Vector2[] uvs) = MeshHelper.GenerateGridMesh(20, 20, 20);
         meshFilter.mesh.vertices = vertices;
         meshFilter.mesh.triangles = triangles;
         meshFilter.mesh.uv = uvs;

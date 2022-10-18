@@ -12,14 +12,9 @@ RWBuffer<int> triangleIntersects; //Size: nb of cells * nb of triangles in water
 RWBuffer<int> nbTriangleIntersects; //Size: nb of cells. Contains the number of triangle in each cell
 
 //Water mesh ==========
-RWStructuredBuffer<float2> verticesPlanPosition;
-RWBuffer<float> verticesHeightMap; //To be set each frame
+RWStructuredBuffer<float3> vertices;
 RWBuffer<int> triangles;
 uint nbTriangles;
-
-
-
-float3x4 transformationMatrix; //To be set each frame
 
 bool Intersects(float3 position1, float3 size1, float3 position2, float3 size2) 
 {
@@ -47,12 +42,9 @@ void FindTriangleCandidate (uint id : SV_DispatchThreadID)
         int triangleBIndex = triangles[j * 3 + 1];
         int triangleCIndex = triangles[j * 3 + 2];
 
-        float4 a = {verticesPlanPosition[triangleAIndex].x, verticesHeightMap[triangleAIndex], verticesPlanPosition[triangleAIndex].y, 1};
-        float4 b = {verticesPlanPosition[triangleBIndex].x, verticesHeightMap[triangleBIndex], verticesPlanPosition[triangleBIndex].y, 1};
-        float4 c = {verticesPlanPosition[triangleCIndex].x, verticesHeightMap[triangleCIndex], verticesPlanPosition[triangleCIndex].y, 1};
-        float3 av3 = mul(transformationMatrix, a);
-        float3 bv3 = mul(transformationMatrix, b);
-        float3 cv3 = mul(transformationMatrix, c);
+        float3 av3 = vertices[triangleAIndex];
+        float3 bv3 = vertices[triangleBIndex];
+        float3 cv3 = vertices[triangleCIndex];
 
         float3 mins = { min(min(av3.x, bv3.x), cv3.x),
                         min(min(av3.y, bv3.y), cv3.y),
