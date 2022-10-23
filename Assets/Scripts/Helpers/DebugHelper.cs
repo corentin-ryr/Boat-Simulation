@@ -38,9 +38,9 @@ public static class DebugHelper
         Debug.DrawLine(p4, p8, Color.cyan, delay);
     }
 
-    public static void ShowMesh(Triangle[] triangles, Transform transform, Color color)
+    public static void ShowMesh(Triangle[] triangles, Transform transform, Color color, bool verbose = true)
     {
-        Debug.Log("Number of candidates: " + triangles.Length);
+        if (verbose) Debug.Log("Number of candidates: " + triangles.Length);
         for (int i = 0; i < triangles.Length; i++)
         {
             Vector3 vertex0 = transform.TransformPoint(triangles[i].Vertex1);

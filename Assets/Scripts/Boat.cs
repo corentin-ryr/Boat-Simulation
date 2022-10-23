@@ -46,7 +46,7 @@ public class Boat : MonoBehaviour
 
     //References ================
     MeshFilter meshFilter;
-    Rigidbody rigidbody;
+    Rigidbody boatRigidbody;
     MeshCollider meshCollider;
     Stopwatch stopWatch;
 
@@ -77,6 +77,7 @@ public class Boat : MonoBehaviour
     public bool showBelowWaterPoints;
     public bool showCenterOfMass;
     public bool showWaterMesh;
+    public bool showForces;
 
 
 
@@ -97,8 +98,8 @@ public class Boat : MonoBehaviour
     {
         meshFilter = GetComponent<MeshFilter>();
 
-        rigidbody = GetComponent<Rigidbody>();
-        rigidbody.centerOfMass = centerOfMass;
+        boatRigidbody = GetComponent<Rigidbody>();
+        boatRigidbody.centerOfMass = centerOfMass;
 
         meshCollider = GetComponent<MeshCollider>();
         stopWatch = new Stopwatch();
@@ -168,7 +169,7 @@ public class Boat : MonoBehaviour
             //Test if there is water above
             if (ocean.GetWaterHeight(transform.position) > transform.position.y)
             {
-                rigidbody.AddForceAtPosition(volume * 1000 * 9.91f * Vector3.up, transform.TransformPoint(barycentre));
+                boatRigidbody.AddForceAtPosition(volume * 1000 * 9.91f * Vector3.up, transform.TransformPoint(barycentre));
             }
 
             return;
@@ -179,11 +180,11 @@ public class Boat : MonoBehaviour
         b = chain[chain.Count / 3];
         c = chain[chain.Count / 3 * 2];
         waterIntersectionNormal = Vector3.Cross(a - b, a - c).normalized;
-        waterIntersectionNormal = Vector3.Dot(waterIntersectionNormal, transform.InverseTransformPoint(Vector3.up)) < 0 ? -waterIntersectionNormal : waterIntersectionNormal;
+        waterIntersectionNormal = Vector3.Dot(waterIntersectionNormal, transform.InverseTransformPoint(Vector3.up)) < 0 ? -waterIntersectionNormal : waterIntersectionNormal; // We inverse the normal direction if it points downward
 
         averageWaterPosition = new Vector3(chain.Average(x => x.x), chain.Average(x => x.y), chain.Average(x => x.z));
 
-        if (showWaterNormal) UnityEngine.Debug.DrawRay(transform.position, waterIntersectionNormal, Color.red);
+        // if (showWaterNormal) UnityEngine.Debug.DrawRay(transform.position, waterIntersectionNormal, Color.red);
 
 
         //We triangulate the boat (we need to find the triangles below the line)
@@ -206,8 +207,8 @@ public class Boat : MonoBehaviour
 
         if (showIntersectionMesh)
         {
-            DebugHelper.ShowMesh(bottomHalf, transform, Color.blue);
-            DebugHelper.ShowMesh(seaTriangulated.ToArray(), transform, Color.blue);
+            DebugHelper.ShowMesh(bottomHalf, transform, Color.blue, false);
+            DebugHelper.ShowMesh(seaTriangulated.ToArray(), transform, Color.blue, false);
         }
 
         //Apply the forces
@@ -739,23 +740,33 @@ public class Boat : MonoBehaviour
 
     private void ApplyBuoyancy(Triangle[] bottomHalf, Triangle[] trianglesSea)
     {
-        (Vector3 barycentreBoat, float volumeBoat, Vector3 linearDragBoat, Vector3 angularDragBoat) = MeshHelper.ComputeVolumeAndBarycentre(bottomHalf, rigidbody.velocity, rigidbody.angularVelocity, C);
-        (Vector3 barycentreSea, float volumeSea, Vector3 linearDragSea, Vector3 angularDragSea) = MeshHelper.ComputeVolumeAndBarycentre(trianglesSea, rigidbody.velocity, rigidbody.angularVelocity, C, 1.2f, 1E-5f);
+
+        Vector3 localVelocity = transform.InverseTransformDirection(boatRigidbody.velocity);
+        Vector3 localAngularVelocity = transform.InverseTransformDirection(boatRigidbody.angularVelocity);
+
+        (Vector3 barycentreBoat, float volumeBoat, Vector3 linearDragBoat, Vector3 angularDragBoat) = MeshHelper.ComputeVolumeAndBarycentre(bottomHalf, localVelocity, localAngularVelocity, C);
+        (Vector3 barycentreSea, float volumeSea, Vector3 linearDragSea, Vector3 angularDragSea) = MeshHelper.ComputeVolumeAndBarycentre(trianglesSea, localVelocity, localAngularVelocity, C, 1.2f, 1E-5f);
 
         newVolume = volumeSea + volumeBoat;
         newBarycentre = (barycentreBoat * volumeBoat + barycentreSea * volumeSea) / newVolume;
 
 
-        if(newVolume > 4) UnityEngine.Debug.Log("Warning volume" + newVolume);
-        if(newBarycentre.magnitude > 1.2) UnityEngine.Debug.Log("Warning barycenter" + newBarycentre);
+        if(newVolume > 4) UnityEngine.Debug.LogWarning("Warning volume" + newVolume);
+        if(newBarycentre.magnitude > 1.2) UnityEngine.Debug.LogWarning("Warning barycenter" + newBarycentre);
 
-        // float linearDrag = 
-        UnityEngine.Debug.DrawRay(transform.position, transform.TransformDirection(waterIntersectionNormal), Color.red);
+        if (showWaterNormal) UnityEngine.Debug.DrawRay(transform.position, transform.TransformDirection(waterIntersectionNormal), Color.red);
 
-        rigidbody.AddForceAtPosition(newVolume * 1000 * 9.81f * transform.TransformDirection(waterIntersectionNormal), transform.TransformPoint(newBarycentre));
+        if(showForces) {
+            UnityEngine.Debug.DrawRay(transform.TransformPoint(newBarycentre), newVolume * 9.81f * transform.TransformDirection(waterIntersectionNormal) / 10, Color.green);
+            UnityEngine.Debug.DrawRay(transform.position, transform.TransformDirection(linearDragBoat + linearDragSea) / 10, Color.cyan);
+        }
+        
 
-        rigidbody.AddForce(transform.TransformDirection(linearDragBoat + linearDragSea));
-        rigidbody.AddTorque(transform.TransformDirection(angularDragSea + angularDragBoat));
+        boatRigidbody.AddForceAtPosition(newVolume * 1000 * 9.81f * transform.TransformDirection(waterIntersectionNormal), transform.TransformPoint(newBarycentre));
+
+
+        boatRigidbody.AddForce(transform.TransformDirection(linearDragBoat + linearDragSea));
+        boatRigidbody.AddTorque(transform.TransformDirection(angularDragSea + angularDragBoat));
 
         // if(rigidbody.velocity.magnitude > 10) UnityEditor.play
 
@@ -811,10 +822,10 @@ public class Boat : MonoBehaviour
         if (showBelowWaterPoints && meshFilter)
         {
             Gizmos.color = Color.red;
-            Gizmos.DrawSphere(averageWaterPosition, 0.1f);
+            Gizmos.DrawSphere(transform.TransformPoint(averageWaterPosition), 0.1f);
             foreach (Vector3 vertex in meshFilter.mesh.vertices)
             {
-                if (PointHeight(transform.TransformPoint(vertex)) < PointHeight(averageWaterPosition))
+                if (PointHeight(vertex) < PointHeight(averageWaterPosition))
                 {
                     Gizmos.color = Color.blue;
                     Gizmos.DrawSphere(transform.TransformPoint(vertex), 0.01f);
@@ -822,10 +833,10 @@ public class Boat : MonoBehaviour
             }
         }
 
-        if (showCenterOfMass && rigidbody)
+        if (showCenterOfMass && boatRigidbody)
         {
             Gizmos.color = Color.green;
-            Gizmos.DrawSphere(transform.TransformPoint(rigidbody.centerOfMass), 0.1f);
+            Gizmos.DrawSphere(transform.TransformPoint(boatRigidbody.centerOfMass), 0.1f);
         }
 
     }
