@@ -193,16 +193,18 @@ public static class MeshHelper
         int ny = Mathf.CeilToInt(meshBounds.size.y / cellSize.y);
         int nz = Mathf.CeilToInt(meshBounds.size.z / cellSize.z);
 
-        Vector3 newCellSize = new Vector3((meshBounds.size.x / nx), (meshBounds.size.y / ny), (meshBounds.size.z / nz));
+        const float margin = 0.05f;
+
+        Vector3 newCellSize = new Vector3(((meshBounds.size.x + 2 * margin) / nx), ((meshBounds.size.y + 2 * margin) / ny), ((meshBounds.size.z + 2 * margin) / nz));
         for (int i = 0; i < nx; i++)
         {
             for (int j = 0; j < ny; j++)
             {
                 for (int k = 0; k < nz; k++)
                 {
-                    Vector3 center = new Vector3(newCellSize.x * i + newCellSize.x / 2 + meshBounds.min.x,
-                                                newCellSize.y * j + newCellSize.y / 2 + meshBounds.min.y,
-                                                newCellSize.z * k + newCellSize.z / 2 + meshBounds.min.z);
+                    Vector3 center = new Vector3(newCellSize.x * (i + 0.5f) + meshBounds.min.x - margin,
+                                                newCellSize.y * (j + 0.5f) + meshBounds.min.y - margin,
+                                                newCellSize.z * (k + 0.5f) + meshBounds.min.z - margin);
 
                     gridBounds.Add(new Cell(new Bounds(center, newCellSize), nbVertices / 2));
                 }
@@ -281,16 +283,6 @@ public static class MeshHelper
             float projectedSurfaceLinearSpeed = Vector3.Dot(normal, linearSpeed) > 0 ? ProjectedSurface(vertex1, vertex2, vertex3, linearSpeed) : 0;
             linearDrag -= rho * 0.5f * linearSpeed.magnitude * linearSpeed * projectedSurfaceLinearSpeed * C;
 
-            if (i == 1)
-            {
-                // Debug.Log("Speed at triangle " + speedAtTriangle.magnitude);
-                // Debug.Log("ProjectedSurface " + projectedSurfaceAngularSpeed);
-                // Debug.Log("Radius " + trianglePosition.magnitude);
-
-                // Debug.DrawLine(referencePoint, trianglePosition + referencePoint, Color.cyan);
-                // Debug.DrawRay(trianglePosition + referencePoint, speedAtTriangle.normalized, Color.red);
-                // Debug.DrawRay(referencePoint, -tempAngularDrag.normalized, Color.green);
-            }
         }
 
         barycentre /= volume;
@@ -357,7 +349,6 @@ public static class MeshHelper
                 uvs[i] = new Vector2(x / (float)xSize, y / (float)ySize);
             }
         }
-
 
         int[] triangles = new int[xSize * ySize * 6];
         for (int ti = 0, vi = 0, y = 0; y < ySize; y++, vi++)
