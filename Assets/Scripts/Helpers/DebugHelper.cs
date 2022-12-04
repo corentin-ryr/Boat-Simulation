@@ -38,9 +38,9 @@ public static class DebugHelper
         Debug.DrawLine(p4, p8, Color.cyan, delay);
     }
 
-    public static void ShowMesh(Triangle[] triangles, Transform transform, Color color)
+    public static void ShowMesh(Triangle[] triangles, Transform transform, Color color, bool verbose = true)
     {
-        Debug.Log("Number of candidates: " + triangles.Length);
+        if (verbose) Debug.Log("Number of candidates: " + triangles.Length);
         for (int i = 0; i < triangles.Length; i++)
         {
             Vector3 vertex0 = transform.TransformPoint(triangles[i].Vertex1);
@@ -51,7 +51,7 @@ public static class DebugHelper
             Debug.DrawLine(vertex1, vertex2, color);
             Debug.DrawLine(vertex2, vertex0, color);
 
-            Debug.DrawLine(transform.position, (vertex0 + vertex1 + vertex2) / 3f, Color.black);
+            // Debug.DrawLine(transform.position, (vertex0 + vertex1 + vertex2) / 3f, Color.black);
         }
     }
     public static void ShowMesh(Triangle[] triangles, Color color)
@@ -81,6 +81,7 @@ public static class DebugHelper
             Debug.DrawLine(c, a, color);
         }
     }
+
  
 
 }

@@ -6,7 +6,7 @@ using System.Linq;
 [RequireComponent(typeof(MeshCollider))]
 [RequireComponent(typeof(MeshFilter))]
 [RequireComponent(typeof(MeshRenderer))]
-public class Water : MonoBehaviour
+public class SinusoidalWater : MonoBehaviour, IWater
 {
 
     MeshFilter meshFilter;
@@ -33,7 +33,7 @@ public class Water : MonoBehaviour
     {
         meshFilter = GetComponent<MeshFilter>();
 
-        (Vector3[] vertices, int[] triangles, Vector2[] uvs) = MeshHelper.GenerateGridMesh(20, 20);
+        (Vector3[] vertices, int[] triangles, Vector2[] uvs) = MeshHelper.GenerateGridMesh(20, 20, 20);
         meshFilter.mesh.vertices = vertices;
         meshFilter.mesh.triangles = triangles;
         meshFilter.mesh.uv = uvs;
@@ -61,15 +61,15 @@ public class Water : MonoBehaviour
 
         for (int i = 0; i < vertices.Length; i++)
         {
-            heightMap[i] = GetHeight(vertices[i]);
+            heightMap[i] = GetWaterHeight(vertices[i]);
             vertices[i].y = heightMap[i];
         }
 
         for (int i = 0; i < triangleNeighbors.Length; i++)
         {
-            triangleNeighbors[i].SetVertex1Height(GetHeight(triangleNeighbors[i].Vertex1));
-            triangleNeighbors[i].SetVertex2Height(GetHeight(triangleNeighbors[i].Vertex2));
-            triangleNeighbors[i].SetVertex3Height(GetHeight(triangleNeighbors[i].Vertex3));
+            triangleNeighbors[i].SetVertex1Height(GetWaterHeight(triangleNeighbors[i].Vertex1));
+            triangleNeighbors[i].SetVertex2Height(GetWaterHeight(triangleNeighbors[i].Vertex2));
+            triangleNeighbors[i].SetVertex3Height(GetWaterHeight(triangleNeighbors[i].Vertex3));
         }
 
         meshFilter.mesh.vertices = vertices;
@@ -82,7 +82,7 @@ public class Water : MonoBehaviour
         triangleNeighbors = MeshHelper.FindTriangleNeighbors(meshFilter.mesh);
     }
 
-    private float GetHeight(Vector3 position)
+    public float GetWaterHeight(Vector3 position)
     {
         return Mathf.Sin(position.x * 0.5f + Time.time) * waterAmplitude;
     }

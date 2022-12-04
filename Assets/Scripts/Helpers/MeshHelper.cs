@@ -13,8 +13,26 @@ public class Triangle
         this.Vertex2 = v2;
         this.Vertex3 = v3;
     }
+    public Triangle(int triangleIndex, Vector3 v1, Vector3 v2, Vector3 v3, int n1, int n2, int n3) //Vector3 vertex1, Vector3 vertex2, Vector3 vertex3, 
+    {
+        this.TriangleIndex = triangleIndex;
+        this.Vertex1 = v1;
+        this.Vertex2 = v2;
+        this.Vertex3 = v3;
+
+        this.N1 = n1;
+        this.N2 = n2;
+        this.N3 = n3;
+    }
 
     public int TriangleIndex { get; }
+
+    private int n1;
+    private int n2;
+    private int n3;
+    public int N1 { get => n1; set => n1 = value; }
+    public int N2 { get => n2; set => n2 = value; }
+    public int N3 { get => n3; set => n3 = value; }
 
     //The 3 vertices of the triangle
     private Vector3 vertex1;
@@ -41,6 +59,11 @@ public class Triangle
     public Triangle[] GetNeighbors()
     {
         return new Triangle[] { T1, T2, T3 };
+    }
+
+    public override string ToString()
+    {
+        return "Triangle: " + this.N1 + ", "  + this.N2 + ", "  + this.N3;
     }
 
 }
@@ -138,7 +161,8 @@ public static class MeshHelper
         {
             Triangle triangle = new Triangle(i, mesh.vertices[mesh.triangles[i * 3]],
                                                 mesh.vertices[mesh.triangles[i * 3 + 1]],
-                                                mesh.vertices[mesh.triangles[i * 3 + 2]]);
+                                                mesh.vertices[mesh.triangles[i * 3 + 2]],
+                                                i * 3, i * 3 + 1, i * 3 + 2);
             triangleNeighbors[i] = triangle;
             (S[mesh.triangles[i * 3]] ??= new List<Triangle>()).Add(triangle);
             (S[mesh.triangles[i * 3 + 1]] ??= new List<Triangle>()).Add(triangle);
@@ -159,6 +183,14 @@ public static class MeshHelper
         return triangleNeighbors;
     }
 
+    public static Triangle[] FindTriangleNeighbors(Vector3[] vertices, int[] triangles)
+    {
+        Mesh mesh = new Mesh();
+        mesh.vertices = vertices;
+        mesh.triangles = triangles;
+        return FindTriangleNeighbors(mesh);
+    }
+
     public static Cell[] ComputeBackgroundGrid(Bounds meshBounds, Vector3 cellSize, int nbVertices)
     {
         List<Cell> gridBounds = new List<Cell>();
@@ -167,16 +199,18 @@ public static class MeshHelper
         int ny = Mathf.CeilToInt(meshBounds.size.y / cellSize.y);
         int nz = Mathf.CeilToInt(meshBounds.size.z / cellSize.z);
 
-        Vector3 newCellSize = new Vector3((meshBounds.size.x / nx), (meshBounds.size.y / ny), (meshBounds.size.z / nz));
+        const float margin = 0.05f;
+
+        Vector3 newCellSize = new Vector3(((meshBounds.size.x + 2 * margin) / nx), ((meshBounds.size.y + 2 * margin) / ny), ((meshBounds.size.z + 2 * margin) / nz));
         for (int i = 0; i < nx; i++)
         {
             for (int j = 0; j < ny; j++)
             {
                 for (int k = 0; k < nz; k++)
                 {
-                    Vector3 center = new Vector3(newCellSize.x * i + newCellSize.x / 2 + meshBounds.min.x,
-                                                newCellSize.y * j + newCellSize.y / 2 + meshBounds.min.y,
-                                                newCellSize.z * k + newCellSize.z / 2 + meshBounds.min.z);
+                    Vector3 center = new Vector3(newCellSize.x * (i + 0.5f) + meshBounds.min.x - margin,
+                                                newCellSize.y * (j + 0.5f) + meshBounds.min.y - margin,
+                                                newCellSize.z * (k + 0.5f) + meshBounds.min.z - margin);
 
                     gridBounds.Add(new Cell(new Bounds(center, newCellSize), nbVertices / 2));
                 }
@@ -216,7 +250,7 @@ public static class MeshHelper
         return (barycentre, volume);
     }
 
-    public static (Vector3, float, Vector3, Vector3) ComputeVolumeAndBarycentre(Triangle[] triangles, Vector3 referencePoint, Matrix4x4 transformation, Vector3 linearSpeed, Vector3 angularSpeed, float C = 1f, float rho = 1000, float mu = 1E-3f)
+    public static (Vector3, float, Vector3, Vector3) ComputeVolumeAndBarycentre(Triangle[] triangles, Vector3 linearSpeed, Vector3 angularSpeed, float C = 1f, float rho = 1000, float mu = 1E-3f)
     {
         float volume = 0f;
         Vector3 barycentre = Vector3.zero;
@@ -225,9 +259,9 @@ public static class MeshHelper
 
         for (int i = 0; i < triangles.Length; i++)
         {
-            Vector3 vertex1 = transformation.MultiplyPoint3x4(triangles[i].Vertex1) - referencePoint;
-            Vector3 vertex2 = transformation.MultiplyPoint3x4(triangles[i].Vertex2) - referencePoint;
-            Vector3 vertex3 = transformation.MultiplyPoint3x4(triangles[i].Vertex3) - referencePoint;
+            Vector3 vertex1 = triangles[i].Vertex1;
+            Vector3 vertex2 = triangles[i].Vertex2;
+            Vector3 vertex3 = triangles[i].Vertex3;
             Vector3 trianglePosition = (vertex1 + vertex2 + vertex3) / 3f;
 
             Vector3 normal = Vector3.Cross(vertex1 - vertex2, vertex1 - vertex3);
@@ -255,20 +289,10 @@ public static class MeshHelper
             float projectedSurfaceLinearSpeed = Vector3.Dot(normal, linearSpeed) > 0 ? ProjectedSurface(vertex1, vertex2, vertex3, linearSpeed) : 0;
             linearDrag -= rho * 0.5f * linearSpeed.magnitude * linearSpeed * projectedSurfaceLinearSpeed * C;
 
-            if (i == 1)
-            {
-                // Debug.Log("Speed at triangle " + speedAtTriangle.magnitude);
-                // Debug.Log("ProjectedSurface " + projectedSurfaceAngularSpeed);
-                // Debug.Log("Radius " + trianglePosition.magnitude);
-
-                // Debug.DrawLine(referencePoint, trianglePosition + referencePoint, Color.cyan);
-                // Debug.DrawRay(trianglePosition + referencePoint, speedAtTriangle.normalized, Color.red);
-                // Debug.DrawRay(referencePoint, -tempAngularDrag.normalized, Color.green);
-            }
         }
 
         barycentre /= volume;
-        return (barycentre + referencePoint, volume, linearDrag, angularDrag);
+        return (barycentre, volume, linearDrag, angularDrag);
     }
 
     public static Mesh WeldVertices(Mesh aMesh, float aMaxDelta = 0.01f)
@@ -318,7 +342,7 @@ public static class MeshHelper
     }
 
 
-    public static (Vector3[], int[], Vector2[]) GenerateGridMesh(int xSize, int ySize)
+    public static (Vector3[], int[], Vector2[]) GenerateGridMesh(float width, int xSize, int ySize)
     {
 
         Vector3[] vertices = new Vector3[(xSize + 1) * (ySize + 1)];
@@ -327,11 +351,10 @@ public static class MeshHelper
         {
             for (int x = 0; x <= xSize; x++, i++)
             {
-                vertices[i] = new Vector3(x, 0, y);
+                vertices[i] = new Vector3(x / (float)xSize * width - width / 2, 0, y / (float)xSize * width - width / 2);
                 uvs[i] = new Vector2(x / (float)xSize, y / (float)ySize);
             }
         }
-
 
         int[] triangles = new int[xSize * ySize * 6];
         for (int ti = 0, vi = 0, y = 0; y < ySize; y++, vi++)

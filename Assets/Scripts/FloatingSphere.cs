@@ -3,11 +3,15 @@ using System.Collections.Generic;
 using UnityEngine;
 
 [RequireComponent(typeof(MeshFilter))]
-public class Sphere : MonoBehaviour
+public class FloatingSphere : MonoBehaviour
 {
     Isocahedron isocahedron;
     public ComputeShader computeShader;
     MeshFilter meshFilter;
+
+    MeshCollider meshCollider;
+
+    Floater floater;
 
     public int nbSubdivision;
     // Start is called before the first frame update
@@ -16,6 +20,8 @@ public class Sphere : MonoBehaviour
         isocahedron = new Isocahedron(nbSubdivision, 1f, computeShader, Callback);
         isocahedron.CreateSphere();
         meshFilter = GetComponent<MeshFilter>();
+        meshCollider = GetComponent<MeshCollider>();
+        floater = GetComponent<Floater>();
     }
 
     void Callback(Vector3Int[] trianglesArray, Vector3[] vertices)
@@ -30,6 +36,9 @@ public class Sphere : MonoBehaviour
         }
         meshFilter.mesh.triangles = triangles.ToArray();
 
-        EventManager.OnFinishedGeneratingMesh();
+        meshCollider.sharedMesh = meshFilter.mesh;
+
+        floater.FloatingMesh = meshFilter.mesh;
+
     }
 }
