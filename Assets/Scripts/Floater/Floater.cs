@@ -10,7 +10,7 @@ public class Floater : MonoBehaviour
 
     //Internal variables of the mesh
     float volume;
-    float newVolume;
+    float totalVolume;
     Vector3 barycentre;
     Vector3 newBarycentre;
     bool meshReady; //Set after the event
@@ -23,7 +23,9 @@ public class Floater : MonoBehaviour
     List<Triangle> triangleCandidateWater;
 
     List<Vector3> chain;
-    List<Vector3> lowerChain;
+    // List<Vector3> lowerChain;
+    List<Triangle> triangleRing;
+
     Vector3 waterIntersectionNormal;
     Vector3 averageWaterPosition;
     int kernelTriangleCandidate;
@@ -62,7 +64,6 @@ public class Floater : MonoBehaviour
     public bool showCandidatesWater;
     public bool showIntersectionLine;
     public bool showIntersectionMesh;
-    public bool showLowerChain;
     public bool showWaterNormal;
     public bool showImmersedBarycentre;
     public bool showBelowWaterPoints;
@@ -101,7 +102,7 @@ public class Floater : MonoBehaviour
         }
 
         chain = new List<Vector3>();
-        lowerChain = new List<Vector3>();
+        // lowerChain = new List<Vector3>();
         triangleCandidateWater = new List<Triangle>();
 
         smoothedVector = new MovingAverage(5);
@@ -123,7 +124,7 @@ public class Floater : MonoBehaviour
         {
             UnityEngine.Debug.Log("Full volume " + volume);
             UnityEngine.Debug.Log("Geometric center of the boat " + barycentre);
-            UnityEngine.Debug.Log("Immersed volume " + newVolume);
+            UnityEngine.Debug.Log("Immersed volume " + totalVolume);
             UnityEngine.Debug.Log("Geometric center of the immersed part " + newBarycentre);
         }
 
@@ -153,7 +154,6 @@ public class Floater : MonoBehaviour
 
 
         //TODO sometimes it bugs
-        List<Triangle> triangleRing;
         (chain, triangleRing) = FloaterHelper.ComputeIntersectingLine(gridCells, transform);
 
         if (chain == null)
@@ -195,19 +195,18 @@ public class Floater : MonoBehaviour
 
         if (showIntersectionMesh)
         {
-            DebugHelper.ShowMesh(bottomHalf, transform, Color.blue, false);
+            DebugHelper.ShowMesh(bottomHalf, transform, Color.yellow, false);
             DebugHelper.ShowMesh(seaTriangulated.ToArray(), transform, Color.blue, false);
+            DebugHelper.ShowMesh(triangleRing.ToArray(), transform, Color.green, false);
         }
 
         //Apply the forces
-        ApplyBuoyancy(bottomHalf, seaTriangulated.ToArray());
+        ApplyBuoyancy(bottomHalf, seaTriangulated.ToArray(), triangleRing.ToArray());
     }
 
     #region Precomputations ======================================================================================
     private void MeshDataPrecomputation() //Executing once the mesh has been created
     {
-        Debug.Log("Precomputation");
-
         floatingMesh = MeshHelper.WeldVertices(floatingMesh, 1E-5f);
         (barycentre, volume) = MeshHelper.ComputeVolumeAndBarycentre(floatingMesh.vertices, floatingMesh.triangles, transform);
 
@@ -404,7 +403,7 @@ public class Floater : MonoBehaviour
         float waterSurfaceDepth = PointHeight(averageWaterPosition);
 
         HashSet<Triangle> bottomHalf = new HashSet<Triangle>();
-        lowerChain.Clear();
+        // lowerChain.Clear();
 
         //Find a point underwater
         Triangle currentTriangle = triangleCandidateBoat[0];
@@ -440,52 +439,42 @@ public class Floater : MonoBehaviour
             currentTriangle = Q.Dequeue();
             foreach (Triangle neighbor in currentTriangle.GetNeighbors())
             {
-                if (MaxTriangleHeight(neighbor) < waterSurfaceDepth)
-                {
-                    if (bottomHalf.Add(neighbor)) Q.Enqueue(neighbor);
-                }
-                else
-                {
-                    lowerChain.AddRange(currentTriangle.GetVertices().Intersect(neighbor.GetVertices()));
-                }
+                if (MaxTriangleHeight(neighbor) < waterSurfaceDepth && bottomHalf.Add(neighbor)) Q.Enqueue(neighbor);
             }
         }
 
         return bottomHalf.ToArray();
     }
 
-    private Triangle[] TriangulateIntermediate()
-    {
-        throw new NotImplementedException();
-    }
 
     #endregion
 
     #region Compute forces on rigidbody ==============================================================================
 
-    private void ApplyBuoyancy(Triangle[] bottomHalf, Triangle[] trianglesSea)
+    private void ApplyBuoyancy(Triangle[] bottomHalf, Triangle[] trianglesSea, Triangle[] intermediate)
     {
         Vector3 localVelocity = transform.InverseTransformDirection(boatRigidbody.velocity);
         Vector3 localAngularVelocity = transform.InverseTransformDirection(boatRigidbody.angularVelocity);
 
         (Vector3 barycentreBoat, float volumeBoat, Vector3 linearDragBoat, Vector3 angularDragBoat) = MeshHelper.ComputeVolumeAndBarycentre(bottomHalf, localVelocity, localAngularVelocity, C);
         (Vector3 barycentreSea, float volumeSea, Vector3 linearDragSea, Vector3 angularDragSea) = MeshHelper.ComputeVolumeAndBarycentre(trianglesSea, localVelocity, localAngularVelocity, C, 1.2f, 1E-5f);
+        (Vector3 barycentreIntermediate, float volumeIntermediate, Vector3 linearDragIntermediate, Vector3 angularDragIntermediate) = MeshHelper.ComputeVolumeAndBarycentre(intermediate, localVelocity, localAngularVelocity, C, 1.2f, 1E-5f);
 
-        newVolume = volumeSea + volumeBoat;
-        newBarycentre = (barycentreBoat * volumeBoat + barycentreSea * volumeSea) / newVolume;
+        totalVolume = volumeSea + volumeBoat + volumeIntermediate;
+        newBarycentre = (barycentreBoat * volumeBoat + barycentreSea * volumeSea + barycentreIntermediate * volumeIntermediate) / totalVolume;
 
-        boatRigidbody.AddForceAtPosition(newVolume * 1000 * 9.81f * transform.TransformDirection(waterIntersectionNormal), transform.TransformPoint(newBarycentre));
+        boatRigidbody.AddForceAtPosition(totalVolume * 1000 * 9.81f * transform.TransformDirection(waterIntersectionNormal), transform.TransformPoint(newBarycentre));
 
-        boatRigidbody.AddForce(transform.TransformDirection(linearDragBoat + linearDragSea));
-        boatRigidbody.AddTorque(transform.TransformDirection(angularDragSea + angularDragBoat));
+        boatRigidbody.AddForce(transform.TransformDirection(linearDragBoat + linearDragSea + linearDragIntermediate));
+        boatRigidbody.AddTorque(transform.TransformDirection(angularDragSea + angularDragBoat + angularDragIntermediate));
 
-        if (newVolume > 4) UnityEngine.Debug.LogWarning("Warning volume" + newVolume);
+        if (totalVolume > 4) UnityEngine.Debug.LogWarning("Warning volume" + totalVolume);
         if (newBarycentre.magnitude > 1.2) UnityEngine.Debug.LogWarning("Warning barycenter" + newBarycentre);
         if (showWaterNormal) UnityEngine.Debug.DrawRay(transform.position, transform.TransformDirection(waterIntersectionNormal), Color.red);
         if (showForces)
         {
-            UnityEngine.Debug.DrawRay(transform.TransformPoint(newBarycentre), newVolume * 9.81f * transform.TransformDirection(waterIntersectionNormal) / 10, Color.green);
-            UnityEngine.Debug.DrawRay(transform.position, transform.TransformDirection(linearDragBoat + linearDragSea) / 10, Color.cyan);
+            UnityEngine.Debug.DrawRay(transform.TransformPoint(newBarycentre), totalVolume * 9.81f * transform.TransformDirection(waterIntersectionNormal) / 10, Color.green);
+            UnityEngine.Debug.DrawRay(transform.position, transform.TransformDirection(linearDragBoat + linearDragSea + linearDragIntermediate) / 10, Color.cyan);
         }
     }
 
@@ -528,24 +517,25 @@ public class Floater : MonoBehaviour
         if (chain?.Count > 0 && showIntersectionLine)
         {
             Gizmos.color = Color.cyan;
-            Gizmos.DrawSphere(transform.TransformPoint(chain[0]), 0.01f);
+            Gizmos.DrawSphere(transform.TransformPoint(chain[0]), 0.02f);
             for (int i = 0; i < chain.Count - 1; i++)
             {
+                Gizmos.color = Color.Lerp(Color.black, Color.white, (float)i / (float)(chain.Count - 1));
                 Gizmos.DrawSphere(transform.TransformPoint(chain[i + 1]), 0.01f);
                 Gizmos.DrawLine(transform.TransformPoint(chain[i]), transform.TransformPoint(chain[i + 1]));
             }
 
         }
-        if (lowerChain?.Count > 0 && showLowerChain)
-        {
-            Gizmos.color = Color.black;
-            Gizmos.DrawSphere(transform.TransformPoint(lowerChain[0]), 0.01f);
-            for (int i = 0; i < lowerChain.Count - 1; i++)
-            {
-                Gizmos.DrawSphere(transform.TransformPoint(lowerChain[i + 1]), 0.05f);
-            }
+        // if (lowerChain?.Count > 0 && showLowerChain)
+        // {
+        //     Gizmos.color = Color.black;
+        //     Gizmos.DrawSphere(transform.TransformPoint(lowerChain[0]), 0.01f);
+        //     for (int i = 0; i < lowerChain.Count - 1; i++)
+        //     {
+        //         Gizmos.DrawSphere(transform.TransformPoint(lowerChain[i + 1]), 0.05f);
+        //     }
 
-        }
+        // }
 
         if (showImmersedBarycentre)
         {
@@ -576,7 +566,7 @@ public class Floater : MonoBehaviour
         if (showWaterSurface)
         {
             DebugHelper.ShowMesh(waterVertices, waterTriangles, gameObject.transform, Color.cyan);
-        
+
         }
 
     }

@@ -61,6 +61,11 @@ public class Triangle
         return new Triangle[] { T1, T2, T3 };
     }
 
+    public override string ToString()
+    {
+        return "Triangle: " + this.N1 + ", "  + this.N2 + ", "  + this.N3;
+    }
+
 }
 
 public struct Cell
@@ -156,7 +161,7 @@ public static class MeshHelper
         {
             Triangle triangle = new Triangle(i, mesh.vertices[mesh.triangles[i * 3]],
                                                 mesh.vertices[mesh.triangles[i * 3 + 1]],
-                                                mesh.vertices[mesh.triangles[i * 3 + 2]], 
+                                                mesh.vertices[mesh.triangles[i * 3 + 2]],
                                                 i * 3, i * 3 + 1, i * 3 + 2);
             triangleNeighbors[i] = triangle;
             (S[mesh.triangles[i * 3]] ??= new List<Triangle>()).Add(triangle);
@@ -178,7 +183,8 @@ public static class MeshHelper
         return triangleNeighbors;
     }
 
-    public static Triangle[] FindTriangleNeighbors(Vector3[] vertices, int[] triangles) {
+    public static Triangle[] FindTriangleNeighbors(Vector3[] vertices, int[] triangles)
+    {
         Mesh mesh = new Mesh();
         mesh.vertices = vertices;
         mesh.triangles = triangles;
