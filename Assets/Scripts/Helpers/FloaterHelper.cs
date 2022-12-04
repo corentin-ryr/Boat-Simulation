@@ -156,7 +156,7 @@ public static class FloaterHelper
                 if (currentCase > 0)
                 {
 
-                    // HandlePolygons(swaped ? triangleToCheckAgainst : currentTriangle, swaped ? currentTriangle : triangleToCheckAgainst, chain[chain.Count - 1], currentP, lowerRing, transform);
+                    HandlePolygons(swaped ? triangleToCheckAgainst : currentTriangle, swaped ? currentTriangle : triangleToCheckAgainst, chain[chain.Count - 1], currentP, lowerRing, transform);
 
                     chain.Add(currentP);
                     swaped = nextSwap;

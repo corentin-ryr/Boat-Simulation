@@ -29,8 +29,6 @@ public class Floater : MonoBehaviour
     int kernelTriangleCandidate;
 
     ComputeBuffer tempBuffer;
-    ComputeBuffer bufferNbTriangleIntersects;
-    ComputeBuffer bufferTriangleIntersects;
 
     MovingAverage smoothedVector;
     Vector3[] waterVertices;
@@ -208,6 +206,8 @@ public class Floater : MonoBehaviour
     #region Precomputations ======================================================================================
     private void MeshDataPrecomputation() //Executing once the mesh has been created
     {
+        Debug.Log("Precomputation");
+
         floatingMesh = MeshHelper.WeldVertices(floatingMesh, 1E-5f);
         (barycentre, volume) = MeshHelper.ComputeVolumeAndBarycentre(floatingMesh.vertices, floatingMesh.triangles, transform);
 
@@ -342,21 +342,15 @@ public class Floater : MonoBehaviour
         //Set the frame data
         int triangleCount = waterTriangles.Length / 3;
         tempBuffer = ComputeHelper.CreateAndSetBuffer(waterVertices, triangleCandidateShader, "vertices", kernelTriangleCandidate);
-        bufferNbTriangleIntersects = ComputeHelper.CreateAndSetBuffer<int>(gridCells.Length, triangleCandidateShader, "nbTriangleIntersects", kernelTriangleCandidate);
-        bufferTriangleIntersects = ComputeHelper.CreateAndSetBuffer<int>(triangleCount * gridCells.Length, triangleCandidateShader, "triangleIntersects", kernelTriangleCandidate);
+        ComputeBuffer bufferCombined = ComputeHelper.CreateAndSetBuffer<int>((triangleCount + 1) * gridCells.Length, triangleCandidateShader, "combinedBuffer", kernelTriangleCandidate);
 
         ComputeHelper.Run(triangleCandidateShader, gridCells.Length, 1, 1, kernelTriangleCandidate);
 
-        int[] triangleIntersects = new int[triangleCount * gridCells.Length];
-        int[] nbTriangleIntersects = new int[gridCells.Length];
+        int[] combined = new int[(triangleCount + 1) * gridCells.Length];
+        bufferCombined.GetData(combined); // Freezing line
+        bufferCombined.Release();
 
-        bufferNbTriangleIntersects.GetData(nbTriangleIntersects); // Freezes when after the other get data (the last get data frozes ?)
-        bufferTriangleIntersects.GetData(triangleIntersects); // Freezing line
-
-        bufferTriangleIntersects.Release();
-        bufferNbTriangleIntersects.Release();
         tempBuffer.Release();
-
 
         HashSet<Triangle> triangleCandidateBoatHS = new HashSet<Triangle>(floatingMesh.triangles.Length / 3);
         if (showCandidatesWater) triangleCandidateWater.Clear();
@@ -365,13 +359,13 @@ public class Floater : MonoBehaviour
         for (int i = 0; i < gridCells.Length; i++)
         {
             gridCells[i].resetSet2();
-            if (nbTriangleIntersects[i] > 0)
+            if (combined[i * (triangleCount + 1)] > 0)
             {
                 cellsWithPotential.Add(i);
                 triangleCandidateBoatHS.UnionWith(gridCells[i].TriangleSet1);
-                for (int j = 0; j < nbTriangleIntersects[i]; j++)
+                for (int j = 0; j < combined[i * (triangleCount + 1)]; j++)
                 {
-                    Triangle triangle = waterTriangleNeighbors[triangleIntersects[i * triangleCount + j]];
+                    Triangle triangle = waterTriangleNeighbors[combined[i * (triangleCount + 1) + j + 1]];
                     gridCells[i].AddSet2(triangle);
                     if (showCandidatesWater) triangleCandidateWater.Add(triangle);
                 }
@@ -433,7 +427,7 @@ public class Floater : MonoBehaviour
             if (previousDepth == minDepth) break;
         }
 
-        if (MaxTriangleHeight(currentTriangle) > waterSurfaceDepth) throw new Exception("No triangle underwater");
+        if (MaxTriangleHeight(currentTriangle) > waterSurfaceDepth) Debug.Log("No triangle underwater");
 
 
         //We have an initial triangle underwater
