@@ -11,6 +11,9 @@ uint nbCells;
 RWBuffer<int> triangleIntersects; //Size: nb of cells * nb of triangles in water 
 RWBuffer<int> nbTriangleIntersects; //Size: nb of cells. Contains the number of triangle in each cell
 
+RWBuffer<int> combinedBuffer; // Size: nb of cells * (nb of triangles in water + 1). 
+                        //The first index in the nb of triangle that intersects and the subsequent indices are the indices of the other triangles (those that intersects)
+
 //Water mesh ==========
 RWStructuredBuffer<float3> vertices;
 RWBuffer<int> triangles;

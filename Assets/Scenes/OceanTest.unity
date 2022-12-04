@@ -744,7 +744,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!114 &1000664393
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -761,7 +761,7 @@ MonoBehaviour:
     type: 3}
   floatingMesh: {fileID: 0}
   cellMaxSize: {x: 0.2, y: 0.2, z: 0.2}
-  centerOfMass: {x: 0, y: 0, z: 0}
+  centerOfMass: {x: 0, y: -0.2, z: 0}
   C: 1
   waterGridWidth: 5
   useColliderAsMesh: 1
@@ -1253,7 +1253,7 @@ MonoBehaviour:
   showBackgroundGrid: 0
   showStatValues: 0
   showCandidatesBoat: 0
-  showCandidatesWater: 1
+  showCandidatesWater: 0
   showIntersectionLine: 1
   showIntersectionMesh: 0
   showLowerChain: 0

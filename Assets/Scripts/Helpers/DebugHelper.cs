@@ -51,7 +51,7 @@ public static class DebugHelper
             Debug.DrawLine(vertex1, vertex2, color);
             Debug.DrawLine(vertex2, vertex0, color);
 
-            Debug.DrawLine(transform.position, (vertex0 + vertex1 + vertex2) / 3f, Color.black);
+            // Debug.DrawLine(transform.position, (vertex0 + vertex1 + vertex2) / 3f, Color.black);
         }
     }
     public static void ShowMesh(Triangle[] triangles, Color color)

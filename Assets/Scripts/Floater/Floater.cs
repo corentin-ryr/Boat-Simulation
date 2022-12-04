@@ -155,7 +155,8 @@ public class Floater : MonoBehaviour
 
 
         //TODO sometimes it bugs
-        chain = FloaterHelper.ComputeIntersectingLine(gridCells);
+        List<Triangle> triangleRing;
+        (chain, triangleRing) = FloaterHelper.ComputeIntersectingLine(gridCells, transform);
 
         if (chain == null)
         {
@@ -346,15 +347,16 @@ public class Floater : MonoBehaviour
 
         ComputeHelper.Run(triangleCandidateShader, gridCells.Length, 1, 1, kernelTriangleCandidate);
 
+        int[] triangleIntersects = new int[triangleCount * gridCells.Length];
         int[] nbTriangleIntersects = new int[gridCells.Length];
-        bufferNbTriangleIntersects.GetData(nbTriangleIntersects);
-        bufferNbTriangleIntersects.Release();
 
-        int[] triangleIntersects = new int[gridCells.Length * triangleCount];
-        bufferTriangleIntersects.GetData(triangleIntersects);
+        bufferNbTriangleIntersects.GetData(nbTriangleIntersects); // Freezes when after the other get data (the last get data frozes ?)
+        bufferTriangleIntersects.GetData(triangleIntersects); // Freezing line
+
         bufferTriangleIntersects.Release();
-
+        bufferNbTriangleIntersects.Release();
         tempBuffer.Release();
+
 
         HashSet<Triangle> triangleCandidateBoatHS = new HashSet<Triangle>(floatingMesh.triangles.Length / 3);
         if (showCandidatesWater) triangleCandidateWater.Clear();
