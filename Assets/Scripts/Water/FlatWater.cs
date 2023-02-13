@@ -1,15 +1,15 @@
-﻿using System.Collections;
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using System.Linq;
 
 [RequireComponent(typeof(MeshFilter))]
 [RequireComponent(typeof(MeshRenderer))]
-public class SinusoidalWater : MonoBehaviour, IWater
+public class FlatWater : MonoBehaviour, IWater
 {
 
     MeshFilter meshFilter;
-
+    Mesh sharedMeshCollider;
     public Mesh Mesh { get => meshFilter.mesh; }
 
     float[] heightMap;
@@ -62,7 +62,6 @@ public class SinusoidalWater : MonoBehaviour, IWater
         }
 
         meshFilter.mesh.vertices = vertices;
-
     }
 
     private void MeshDataPrecomputation()
@@ -72,7 +71,7 @@ public class SinusoidalWater : MonoBehaviour, IWater
 
     public float GetWaterHeight(Vector3 position)
     {
-        return Mathf.Sin(position.x * 0.5f + Time.time) * waterAmplitude;
+        return 0;
     }
 
     #region Debug and Gizmos =======================================================================

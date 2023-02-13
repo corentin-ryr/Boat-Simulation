@@ -104,7 +104,7 @@ public struct Cell
 
     public bool HasCandidates()
     {
-        if (triangleSet1.Count > 0 && triangleSet2.Count > 0)
+        if (hasCandidatePotential && triangleSet2.Count > 0)
         {
             return true;
         }

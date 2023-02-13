@@ -108,9 +108,36 @@ public static class FloaterHelper
         return true;
     }
 
+    private static (Triangle[], bool, Triangle, Vector3) FindInitialIntersection(Cell[] gridCells)
+    {
+        Vector3 currentP = Vector3.positiveInfinity;
+        bool swaped = false;
+        Triangle triangleToCheckAgainst = null;
+        Triangle[] nextCurrentTriangles = new Triangle[0];
+        int currentCase;
+
+        foreach (Cell cell in gridCells)
+        {
+            if (!cell.HasCandidates()) continue;
+            foreach (Triangle triangleSet2 in cell.TriangleSet2)
+            {
+                foreach (Triangle triangleSet1 in cell.TriangleSet1)
+                {
+                    (currentCase, nextCurrentTriangles, swaped, triangleToCheckAgainst) = IdentifyCase(triangleSet1, triangleSet2, ref currentP, swaped);
+                    if (currentCase > 0)
+                    {
+                        return (nextCurrentTriangles, swaped, triangleToCheckAgainst, currentP);
+                    }
+                }
+            }
+        }
+
+        throw new System.Exception("No intersection");
+    }
 
 
-    public static (List<Vector3>, List<Triangle>) ComputeIntersectingLine(Cell[] gridCells, Transform transform)
+
+    public static (List<Vector3>, List<Triangle>) ComputeIntersectingLine(Cell[] gridCells)
     {
         List<Vector3> chain = new List<Vector3>();
 
@@ -120,30 +147,19 @@ public static class FloaterHelper
         Vector3 currentP = Vector3.positiveInfinity;
         Triangle[] nextCurrentTriangles = new Triangle[0];
         Triangle nextTriangleToCheckAgainst = null;
-        int currentCase;
 
         List<Triangle> lowerRing = new List<Triangle>();
 
-        foreach (Cell cell in gridCells)
+        try
         {
-            foreach (Triangle triangleSet2 in cell.TriangleSet2)
-            {
-                foreach (Triangle triangleSet1 in cell.TriangleSet1)
-                {
-                    (currentCase, nextCurrentTriangles, swaped, triangleToCheckAgainst) = IdentifyCase(triangleSet1, triangleSet2, ref currentP, swaped);
-                    if (currentCase > 0)
-                    {
-                        // chain.Add(currentP);
-
-
-                        goto End;
-                    }
-                }
-            }
+            (nextCurrentTriangles, swaped, triangleToCheckAgainst, currentP) = FloaterHelper.FindInitialIntersection(gridCells);
+        }
+        catch (System.Exception)
+        {
+            Debug.Log("No intersection");
+            return (null, null);
         }
 
-        return (null, null);
-    End:
 
         Vector3? vectorClosestToStart = null;
         //We have the first triangle, we start looping
@@ -152,6 +168,7 @@ public static class FloaterHelper
             foreach (Triangle currentTriangle in nextCurrentTriangles) //Normally only one triangle in this array but if we have cases 3 or 4 we can have 0 or more than 1 triangles.
             {
                 bool nextSwap;
+                int currentCase;
                 (currentCase, nextCurrentTriangles, nextSwap, nextTriangleToCheckAgainst) = IdentifyCase(currentTriangle, triangleToCheckAgainst, ref currentP, swaped);
                 if (currentCase > 0)
                 {
@@ -206,6 +223,7 @@ public static class FloaterHelper
                     break; // No need to check the other potential triangles
                 }
                 UnityEngine.Debug.Log("No intersection");
+                UnityEngine.Debug.Log(nextCurrentTriangles);
                 return (null, null);
             }
 

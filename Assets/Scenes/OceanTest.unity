@@ -761,7 +761,7 @@ MonoBehaviour:
     type: 3}
   floatingMesh: {fileID: 0}
   cellMaxSize: {x: 0.2, y: 0.2, z: 0.2}
-  centerOfMass: {x: 0, y: -0.2, z: 0}
+  centerOfMass: {x: 0, y: 0, z: 0}
   C: 1
   waterGridWidth: 5
   useColliderAsMesh: 1
@@ -770,8 +770,7 @@ MonoBehaviour:
   showCandidatesBoat: 0
   showCandidatesWater: 0
   showIntersectionLine: 1
-  showIntersectionMesh: 1
-  showLowerChain: 0
+  showIntersectionMesh: 0
   showWaterNormal: 0
   showImmersedBarycentre: 0
   showBelowWaterPoints: 0
@@ -801,7 +800,7 @@ Rigidbody:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1000664392}
   serializedVersion: 2
-  m_Mass: 500
+  m_Mass: 600
   m_Drag: 0
   m_AngularDrag: 0.05
   m_UseGravity: 1
@@ -1256,7 +1255,6 @@ MonoBehaviour:
   showCandidatesWater: 0
   showIntersectionLine: 1
   showIntersectionMesh: 0
-  showLowerChain: 0
   showWaterNormal: 0
   showImmersedBarycentre: 0
   showBelowWaterPoints: 0

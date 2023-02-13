@@ -1,4 +1,5 @@
 ﻿using UnityEngine;
+using UnityEditor;
 using System.Collections.Generic;
 using System;
 using System.Linq;
@@ -147,37 +148,30 @@ public class Floater : MonoBehaviour
         if (!meshReady) return;
         UpdateWaterMesh();
 
-        int[] cellCandidates = FindTriangleCandidatesGPU();
+        FindTriangleCandidatesGPU();
 
         if (showCandidatesBoat) DebugHelper.ShowMesh(triangleCandidateBoat, transform, Color.red);
         if (showCandidatesWater) DebugHelper.ShowMesh(triangleCandidateWater.ToArray(), transform, Color.blue);
 
-
         //TODO sometimes it bugs
-        (chain, triangleRing) = FloaterHelper.ComputeIntersectingLine(gridCells, transform);
+        (chain, triangleRing) = FloaterHelper.ComputeIntersectingLine(gridCells);
 
+        // If there is no chain, there is no intersection so we are either fully submerge or fully out
         if (chain == null)
         {
             //Test if there is water above
-            if (water.GetWaterHeight(transform.position) > transform.position.y)
+            if (water.GetWaterHeight(transform.position) > transform.TransformPoint(barycentre).y)
             {
-                boatRigidbody.AddForceAtPosition(volume * 1000 * 9.91f * Vector3.up, transform.TransformPoint(barycentre));
+                ApplyBuoyancy(null, null, null);
             }
             return;
         }
 
         //Compute water surface normal (we take 3 points as far away from each other as possible and compute the normal)
-        Vector3 a = chain[0];
-        Vector3 b = chain[chain.Count / 3];
-        Vector3 c = chain[chain.Count / 3 * 2];
-        waterIntersectionNormal = Vector3.Cross(a - b, a - c).normalized;
-        waterIntersectionNormal = Vector3.Dot(waterIntersectionNormal, transform.InverseTransformPoint(Vector3.up)) < 0 ? -waterIntersectionNormal : waterIntersectionNormal; // We inverse the normal direction if it points downward
-
-        averageWaterPosition = new Vector3(chain.Average(x => x.x), chain.Average(x => x.y), chain.Average(x => x.z));
+        ComputeWaterPositonAndNormal();
 
         //We triangulate the boat (we need to find the triangles below the line)
         Triangle[] bottomHalf = FindBottomHalfOfBoat();
-        if (bottomHalf.Length == 0) return;
 
         //We triangulate the sea (we just create a plane with the circle)
         List<Triangle> seaTriangulated = new List<Triangle>();
@@ -336,7 +330,7 @@ public class Floater : MonoBehaviour
         return candidateCells.ToArray();
     }
 
-    private int[] FindTriangleCandidatesGPU() //Optimized version of the cpu one above
+    private void FindTriangleCandidatesGPU() //Optimized version of the cpu one above
     {
         //Set the frame data
         int triangleCount = waterTriangles.Length / 3;
@@ -354,13 +348,11 @@ public class Floater : MonoBehaviour
         HashSet<Triangle> triangleCandidateBoatHS = new HashSet<Triangle>(floatingMesh.triangles.Length / 3);
         if (showCandidatesWater) triangleCandidateWater.Clear();
 
-        List<int> cellsWithPotential = new List<int>();
         for (int i = 0; i < gridCells.Length; i++)
         {
             gridCells[i].resetSet2();
             if (combined[i * (triangleCount + 1)] > 0)
             {
-                cellsWithPotential.Add(i);
                 triangleCandidateBoatHS.UnionWith(gridCells[i].TriangleSet1);
                 for (int j = 0; j < combined[i * (triangleCount + 1)]; j++)
                 {
@@ -372,7 +364,6 @@ public class Floater : MonoBehaviour
         }
 
         triangleCandidateBoat = triangleCandidateBoatHS.ToArray();
-        return cellsWithPotential.ToArray();
     }
 
     private void UpdateWaterMesh()
@@ -393,6 +384,15 @@ public class Floater : MonoBehaviour
             waterTriangleNeighbors[i].Vertex3 = waterVertices[waterTriangles[waterTriangleNeighbors[i].N3]];
         }
     }
+
+    private void ComputeWaterPositonAndNormal()
+    {
+        Vector3 a = chain[0];
+        waterIntersectionNormal = Vector3.Cross(a - chain[chain.Count / 3], a - chain[chain.Count / 3 * 2]).normalized;
+        waterIntersectionNormal = Vector3.Dot(waterIntersectionNormal, transform.InverseTransformPoint(Vector3.up)) < 0 ? -waterIntersectionNormal : waterIntersectionNormal; // We inverse the normal direction if it points downward
+        averageWaterPosition = new Vector3(chain.Average(x => x.x), chain.Average(x => x.y), chain.Average(x => x.z));
+    }
+
     #endregion
 
 
@@ -403,34 +403,39 @@ public class Floater : MonoBehaviour
         float waterSurfaceDepth = PointHeight(averageWaterPosition);
 
         HashSet<Triangle> bottomHalf = new HashSet<Triangle>();
-        // lowerChain.Clear();
+        Triangle currentTriangle = triangleCandidateBoat[0];
+
 
         //Find a point underwater
-        Triangle currentTriangle = triangleCandidateBoat[0];
-        float minDepth = float.MaxValue;
-        while (minDepth > waterSurfaceDepth)
+        Queue<Triangle> Q = new Queue<Triangle>();
+        Q.Enqueue(triangleCandidateBoat[0]);
+
+        List<Triangle> triangleVisited = new List<Triangle>();
+
+        while (Q.Count > 0)
         {
-            minDepth = MaxTriangleHeight(currentTriangle);
-            float previousDepth = minDepth;
-            //Get the neighbor further down
+            currentTriangle = Q.Dequeue();
             foreach (Triangle neighbor in currentTriangle.GetNeighbors())
             {
-                float depth = MaxTriangleHeight(neighbor);
-                if (depth < minDepth)
+                if (TriangleUnderWater(neighbor))
                 {
                     currentTriangle = neighbor;
-                    minDepth = depth;
+                    Q.Clear();
+                    break;
                 }
-            }
+                if (!triangleVisited.Contains(neighbor))
+                {
+                    Q.Enqueue(neighbor);
+                    triangleVisited.Add(neighbor);
+                }
 
-            if (previousDepth == minDepth) break;
+            }
         }
 
-        if (MaxTriangleHeight(currentTriangle) > waterSurfaceDepth) Debug.Log("No triangle underwater");
-
+        //We have an initial triangle underwater
+        if (!TriangleUnderWater(currentTriangle)) Debug.Log("No triangle underwater");
 
         //We have an initial triangle underwater
-        Queue<Triangle> Q = new Queue<Triangle>();
         Q.Enqueue(currentTriangle);
         bottomHalf.Add(currentTriangle);
 
@@ -439,7 +444,7 @@ public class Floater : MonoBehaviour
             currentTriangle = Q.Dequeue();
             foreach (Triangle neighbor in currentTriangle.GetNeighbors())
             {
-                if (MaxTriangleHeight(neighbor) < waterSurfaceDepth && bottomHalf.Add(neighbor)) Q.Enqueue(neighbor);
+                if (TriangleUnderWater(neighbor) && bottomHalf.Add(neighbor)) Q.Enqueue(neighbor);
             }
         }
 
@@ -453,28 +458,60 @@ public class Floater : MonoBehaviour
 
     private void ApplyBuoyancy(Triangle[] bottomHalf, Triangle[] trianglesSea, Triangle[] intermediate)
     {
+        List<Vector3> forceOrigin = new List<Vector3>();
+        List<Vector3> forceDirection = new List<Vector3>();
+
         Vector3 localVelocity = transform.InverseTransformDirection(boatRigidbody.velocity);
         Vector3 localAngularVelocity = transform.InverseTransformDirection(boatRigidbody.angularVelocity);
 
-        (Vector3 barycentreBoat, float volumeBoat, Vector3 linearDragBoat, Vector3 angularDragBoat) = MeshHelper.ComputeVolumeAndBarycentre(bottomHalf, localVelocity, localAngularVelocity, C);
-        (Vector3 barycentreSea, float volumeSea, Vector3 linearDragSea, Vector3 angularDragSea) = MeshHelper.ComputeVolumeAndBarycentre(trianglesSea, localVelocity, localAngularVelocity, C, 1.2f, 1E-5f);
-        (Vector3 barycentreIntermediate, float volumeIntermediate, Vector3 linearDragIntermediate, Vector3 angularDragIntermediate) = MeshHelper.ComputeVolumeAndBarycentre(intermediate, localVelocity, localAngularVelocity, C, 1.2f, 1E-5f);
+        if (bottomHalf is not null && trianglesSea is not null && intermediate is not null)
+        {
 
-        totalVolume = volumeSea + volumeBoat + volumeIntermediate;
-        newBarycentre = (barycentreBoat * volumeBoat + barycentreSea * volumeSea + barycentreIntermediate * volumeIntermediate) / totalVolume;
+            (Vector3 barycentreBoat, float volumeBoat, Vector3 linearDragBoat, Vector3 angularDragBoat) = MeshHelper.ComputeVolumeAndBarycentre(bottomHalf, localVelocity, localAngularVelocity, C);
+            (Vector3 barycentreSea, float volumeSea, Vector3 linearDragSea, Vector3 angularDragSea) = MeshHelper.ComputeVolumeAndBarycentre(trianglesSea, localVelocity, localAngularVelocity, C, 1.2f, 1E-5f);
+            (Vector3 barycentreIntermediate, float volumeIntermediate, Vector3 linearDragIntermediate, Vector3 angularDragIntermediate) = MeshHelper.ComputeVolumeAndBarycentre(intermediate, localVelocity, localAngularVelocity, C, 1.2f, 1E-5f);
 
-        boatRigidbody.AddForceAtPosition(totalVolume * 1000 * 9.81f * transform.TransformDirection(waterIntersectionNormal), transform.TransformPoint(newBarycentre));
+            totalVolume = volumeSea + volumeBoat + volumeIntermediate;
+            newBarycentre = (barycentreBoat * volumeBoat + barycentreSea * volumeSea + barycentreIntermediate * volumeIntermediate) / totalVolume;
 
-        boatRigidbody.AddForce(transform.TransformDirection(linearDragBoat + linearDragSea + linearDragIntermediate));
-        boatRigidbody.AddTorque(transform.TransformDirection(angularDragSea + angularDragBoat + angularDragIntermediate));
+            boatRigidbody.AddForceAtPosition(totalVolume * 1000 * 9.81f * transform.TransformDirection(waterIntersectionNormal), transform.TransformPoint(newBarycentre));
 
-        if (totalVolume > 4) UnityEngine.Debug.LogWarning("Warning volume" + totalVolume);
-        if (newBarycentre.magnitude > 1.2) UnityEngine.Debug.LogWarning("Warning barycenter" + newBarycentre);
+            boatRigidbody.AddForce(transform.TransformDirection(linearDragBoat + linearDragSea + linearDragIntermediate));
+            boatRigidbody.AddTorque(transform.TransformDirection(angularDragSea + angularDragBoat + angularDragIntermediate));
+
+            forceOrigin.Add(transform.TransformPoint(newBarycentre));
+            forceOrigin.Add(transform.position);
+
+            forceDirection.Add(totalVolume * 9.81f * transform.TransformDirection(waterIntersectionNormal));
+            forceDirection.Add(transform.TransformDirection(linearDragBoat + linearDragSea + linearDragIntermediate));
+        }
+        else
+        {
+            (Vector3 barycentreBoat, float volumeBoat, Vector3 linearDragBoat, Vector3 angularDragBoat) = MeshHelper.ComputeVolumeAndBarycentre(boatTriangleNeighbors, localVelocity, localAngularVelocity, C);
+
+            boatRigidbody.AddForceAtPosition(volume * 1000 * 9.91f * Vector3.up, transform.TransformPoint(barycentre));
+
+            boatRigidbody.AddForce(transform.TransformDirection(linearDragBoat));
+            boatRigidbody.AddTorque(transform.TransformDirection(angularDragBoat));
+
+            forceOrigin.Add(transform.TransformPoint(newBarycentre));
+            forceOrigin.Add(transform.position);
+
+            forceDirection.Add(volume * 1000 * 9.91f * Vector3.up);
+            forceDirection.Add(transform.TransformDirection(linearDragBoat));
+        }
+
+
         if (showWaterNormal) UnityEngine.Debug.DrawRay(transform.position, transform.TransformDirection(waterIntersectionNormal), Color.red);
         if (showForces)
         {
-            UnityEngine.Debug.DrawRay(transform.TransformPoint(newBarycentre), totalVolume * 9.81f * transform.TransformDirection(waterIntersectionNormal) / 10, Color.green);
-            UnityEngine.Debug.DrawRay(transform.position, transform.TransformDirection(linearDragBoat + linearDragSea + linearDragIntermediate) / 10, Color.cyan);
+            float maxLength = Mathf.Max(forceDirection.Select(i => i.magnitude).ToArray());
+
+            Color[] colors = { Color.green, Color.blue };
+            for (int i = 0; i < forceOrigin.Count; i++)
+            {
+                DrawArrow.ForDebug(forceOrigin[i], forceDirection[i], colors[i]);
+            }
         }
     }
 
@@ -482,14 +519,6 @@ public class Floater : MonoBehaviour
 
 
     #region Helper functions ===================================================================================
-    private float MaxTriangleHeight(Triangle triangle)
-    {
-        return Mathf.Max(Mathf.Max(
-                        PointHeight(triangle.Vertex1),
-                        PointHeight(triangle.Vertex2)),
-                        PointHeight(triangle.Vertex3));
-    }
-
 
     /// <summary>
     ///     Compute the height of the point projected on the water normal 
@@ -500,8 +529,17 @@ public class Floater : MonoBehaviour
     {
         return Vector3.Dot(point, waterIntersectionNormal);
     }
-    #endregion
 
+    private bool TriangleUnderWater(Triangle triangle)
+    {
+        if (Vector3.Dot(triangle.Vertex1 - averageWaterPosition, waterIntersectionNormal) > 0) return false;
+        if (Vector3.Dot(triangle.Vertex2 - averageWaterPosition, waterIntersectionNormal) > 0) return false;
+        if (Vector3.Dot(triangle.Vertex3 - averageWaterPosition, waterIntersectionNormal) > 0) return false;
+
+        return true;
+    }
+
+    #endregion
 
 
     #region Gizmos and debug =====================================================================================
