@@ -269,10 +269,8 @@ public static class MeshHelper
             float tetraVolume = Mathf.Abs(Vector3.Dot(vertex1, Vector3.Cross(vertex2, vertex3))) / 6f;
             Vector3 tetraCentroid = (vertex1 + vertex2 + vertex3) * tetraVolume * 0.25f;
 
-            float faceSign = Mathf.Sign(Vector3.Dot(normal, vertex1));
-
-            volume += faceSign * tetraVolume;
-            barycentre += faceSign * tetraCentroid;
+            volume += tetraVolume;
+            barycentre += tetraCentroid;
 
             Vector3 speedAtTriangle = Vector3.Cross(angularSpeed, trianglePosition);//  / (trianglePosition.magnitude * trianglePosition.magnitude);
 
@@ -291,7 +289,7 @@ public static class MeshHelper
 
         }
 
-        barycentre /= volume;
+        if (volume > 0f) barycentre /= volume;
         return (barycentre, volume, linearDrag, angularDrag);
     }
 

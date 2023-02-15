@@ -58,23 +58,34 @@ public static class FloaterHelper
         }
 
         Triangle nextTriangleToCheckAgainst;
+        
+        //Case 3 if p lies in the other triangle
+        if (case2) {
+            if(tempP2 == a || tempP2 == b || tempP2 == c) {
+                P = tempP2;
+                triangleIndicesToCheck1 = FindTriangleCommonPoint(triangle1, P);
+                nextTriangleToCheckAgainst = triangle2;
+                return (3, triangleIndicesToCheck1, swaped, nextTriangleToCheckAgainst);
+            }
+        }
 
-        if (case1 && case2 && tempP1 == tempP2) //Case when we have the point on the edge of the two triangles. The next triangle to check 
+        if (case1 && case2 && tempP1 == tempP2) //Case when we have the point on the edge of the two triangles.
         {
-            // triangleToCheck = swaped ? triangleIndicesToCheck2[0] : triangleIndicesToCheck1[0];
             nextTriangleToCheckAgainst = triangleIndicesToCheck2[0];
             swaped = !swaped;
             P = tempP1;
             return (1, triangleIndicesToCheck1, swaped, nextTriangleToCheckAgainst); //We act like a case 1 but we have a special triangleToCheck
         }
-        else if (case1) //Case 1, we have to swap and we set the triangle to check next
+        
+        if (case1) //Case 1, we have to swap and we set the triangle to check next
         {
             swaped = !swaped;
             nextTriangleToCheckAgainst = triangle1;
             P = tempP1;
             return (1, triangleIndicesToCheck1, swaped, nextTriangleToCheckAgainst);
         }
-        else if (case2)//Case 2, we don't swap and we also set the next triangle to check
+        
+        if (case2)//Case 2, we don't swap and we also set the next triangle to check
         {
             P = tempP2;
             nextTriangleToCheckAgainst = triangle2;
@@ -96,9 +107,9 @@ public static class FloaterHelper
         float t = D / (D - E);
         Vector3 p = t * e + (1 - t) * d;
 
-        if (Vector3.Dot(Vector3.Cross(a - b, a - p), n) < -1E-9 ||
-            Vector3.Dot(Vector3.Cross(b - c, b - p), n) < -1E-9 ||
-            Vector3.Dot(Vector3.Cross(c - a, c - p), n) < -1E-9) return false;
+        if (Vector3.Dot(Vector3.Cross(a - b, a - p), n) < 0 ||
+            Vector3.Dot(Vector3.Cross(b - c, b - p), n) < 0 ||
+            Vector3.Dot(Vector3.Cross(c - a, c - p), n) < 0) return false;
 
         if (p == previousP)
         {
@@ -106,6 +117,37 @@ public static class FloaterHelper
         }
         newP = p;
         return true;
+    }
+
+    // For the case 3 we need to find all the triangles that touch the point "commonPoint".
+    private static Triangle[] FindTriangleCommonPoint(Triangle startTriangle, Vector3 commonPoint) {
+        List<Triangle> touchingTriangles = new List<Triangle>();
+
+        //Find a point underwater
+        Queue<Triangle> Q = new Queue<Triangle>();
+        List<Triangle> triangleVisited = new List<Triangle>();
+        Q.Enqueue(startTriangle);
+        touchingTriangles.Add(startTriangle);
+
+        while (Q.Count > 0)
+        {
+            Triangle currentTriangle = Q.Dequeue();
+            foreach (Triangle neighbor in currentTriangle.GetNeighbors())
+            {
+                if (triangleVisited.Contains(neighbor)) continue;
+
+                triangleVisited.Add(neighbor);
+
+                if (neighbor.Vertex1 == commonPoint || neighbor.Vertex2 == commonPoint || neighbor.Vertex3 == commonPoint)
+                {
+                    touchingTriangles.Add(neighbor);
+                    Q.Enqueue(neighbor);
+                }
+
+            }
+        }
+
+        return touchingTriangles.ToArray();
     }
 
     private static (Triangle[], bool, Triangle, Vector3) FindInitialIntersection(Cell[] gridCells)
@@ -146,6 +188,7 @@ public static class FloaterHelper
         Triangle triangleToCheckAgainst = null;
         Vector3 currentP = Vector3.positiveInfinity;
         Triangle[] nextCurrentTriangles = new Triangle[0];
+        Triangle[] currentTriangles = new Triangle[0];
         Triangle nextTriangleToCheckAgainst = null;
 
         List<Triangle> lowerRing = new List<Triangle>();
@@ -160,22 +203,27 @@ public static class FloaterHelper
             return (null, null);
         }
 
+        currentTriangles = nextCurrentTriangles;
+
 
         Vector3? vectorClosestToStart = null;
         //We have the first triangle, we start looping
         for (int i = 0; i < 100; i++) //Max number of iteration (security)
         {
-            foreach (Triangle currentTriangle in nextCurrentTriangles) //Normally only one triangle in this array but if we have cases 3 or 4 we can have 0 or more than 1 triangles.
+            foreach (Triangle currentTriangle in currentTriangles)
             {
                 bool nextSwap;
                 int currentCase;
                 (currentCase, nextCurrentTriangles, nextSwap, nextTriangleToCheckAgainst) = IdentifyCase(currentTriangle, triangleToCheckAgainst, ref currentP, swaped);
+                // Debug.Log("Index: " + i);
+                // Debug.Log(currentCase + "\n");
                 if (currentCase > 0)
                 {
                     Triangle waterTriangle = swaped ? currentTriangle : triangleToCheckAgainst;
                     Triangle floatingTriangle = swaped ? triangleToCheckAgainst : currentTriangle;
                     bool changeFloatingTriangle = floatingTriangle != (nextSwap ? nextTriangleToCheckAgainst : nextCurrentTriangles[0]);
 
+                    // Compute the lower ring
                     if (vectorClosestToStart is not null)
                     {
                         Vector3 waterNormal = Vector3.Cross(waterTriangle.Vertex1 - waterTriangle.Vertex2, waterTriangle.Vertex1 - waterTriangle.Vertex3).normalized;
@@ -187,7 +235,7 @@ public static class FloaterHelper
                         if (Vector3.Dot(floatingTriangle.Vertex2 - chain[chain.Count - 1], waterNormal) < 0) underwaterPoints.Add(floatingTriangle.Vertex2);
                         if (Vector3.Dot(floatingTriangle.Vertex3 - chain[chain.Count - 1], waterNormal) < 0) underwaterPoints.Add(floatingTriangle.Vertex3);
 
-                        if (underwaterPoints.Count == 1 && FloaterHelper.showRays)
+                        if (underwaterPoints.Count == 1)
                         {
                             Vector3 tempNormal = Vector3.Cross(underwaterPoints[0] - chain[chain.Count - 1], underwaterPoints[0] - currentP);
                             if (Vector3.Dot(floatingNormal, tempNormal) > 0) lowerRing.Add(new Triangle(0, underwaterPoints[0], chain[chain.Count - 1], currentP));
@@ -209,83 +257,31 @@ public static class FloaterHelper
                                 else lowerRing.Add(new Triangle(0, underwaterPoints[indexStartingFloatingPoint], underwaterPoints[1 - indexStartingFloatingPoint], currentP));
                             }
                         }
-                        else if (FloaterHelper.showRays) Debug.Log("All three points underwater");
+                        else Debug.Log("All three points underwater");
 
                     }
-
-                    if (changeFloatingTriangle) // If we change the floating triangle at the next step
+                    if (changeFloatingTriangle) 
                     {
                         vectorClosestToStart = FloaterHelper.PointAdjacentOnEdge(nextSwap ? nextTriangleToCheckAgainst : nextCurrentTriangles[0], nextSwap ? nextCurrentTriangles[0] : nextTriangleToCheckAgainst, currentP);
                     }
                     if (vectorClosestToStart is not null) chain.Add(currentP);
+
                     swaped = nextSwap;
                     triangleToCheckAgainst = nextTriangleToCheckAgainst;
+                    currentTriangles = nextCurrentTriangles;
                     break; // No need to check the other potential triangles
                 }
-                UnityEngine.Debug.Log("No intersection");
-                UnityEngine.Debug.Log(nextCurrentTriangles);
-                return (null, null);
             }
-
-
-            if (chain.Count > 1 && (currentP - chain[0]).magnitude < 1E-3) break;
-
+            
+            if (nextCurrentTriangles is null) throw new System.Exception("Error during the intersection computation");
+            if (chain.Count > 1 && (currentP == chain[0])) break;
             if (i == 99) Debug.Log("Max number of iteration reached");
         }
 
         return (chain, lowerRing);
     }
 
-    public enum PolygonState
-    {
-        start,
-        middle,
-        end
-    }
 
-    public static bool showRays = true;
-    public static void HandlePolygons(Triangle triangle, Triangle waterTriangle, Vector3 pointA, Vector3 pointB, List<Triangle> polygons, Transform transform, bool newTriangle)
-    {
-        Debug.Log("Handle polygon");
-
-        Vector3 waterNormal = Vector3.Cross(waterTriangle.Vertex1 - waterTriangle.Vertex2, waterTriangle.Vertex1 - waterTriangle.Vertex3).normalized;
-
-
-        List<Vector3> underwaterPoints = new List<Vector3>();
-
-        if (Vector3.Dot(triangle.Vertex1 - pointA, waterNormal) < 0) underwaterPoints.Add(triangle.Vertex1);
-        if (Vector3.Dot(triangle.Vertex2 - pointA, waterNormal) < 0) underwaterPoints.Add(triangle.Vertex2);
-        if (Vector3.Dot(triangle.Vertex3 - pointA, waterNormal) < 0) underwaterPoints.Add(triangle.Vertex3);
-
-        if (underwaterPoints.Count == 1 && FloaterHelper.showRays)
-        {
-            polygons.Add(new Triangle(0, underwaterPoints[0], pointA, pointB));
-            // Debug.DrawLine(transform.TransformPoint(underwaterPoints[0]), transform.TransformPoint(pointA), Color.green);
-            // Debug.DrawLine(transform.TransformPoint(underwaterPoints[0]), transform.TransformPoint(pointB), Color.green);
-            // Debug.DrawLine(transform.TransformPoint(pointA), transform.TransformPoint(pointB), Color.green);
-
-            // FloaterHelper.showRays = false;
-        }
-        else if (underwaterPoints.Count == 2)
-        {
-            int indexStartingFloatingPoint = (pointA - underwaterPoints[0]).magnitude < (pointB - underwaterPoints[0]).magnitude ? 0 : 1;
-            // Vector3 vectorClosestToStart = FloaterHelper.PointAdjacentOnEdge(triangle, waterTriangle, pointA);
-
-            polygons.Add(new Triangle(0, underwaterPoints[indexStartingFloatingPoint], pointA, pointB));
-            Debug.DrawLine(transform.TransformPoint(underwaterPoints[indexStartingFloatingPoint]), transform.TransformPoint(pointA), Color.green);
-            Debug.DrawLine(transform.TransformPoint(underwaterPoints[indexStartingFloatingPoint]), transform.TransformPoint(pointB), Color.green);
-            Debug.DrawLine(transform.TransformPoint(pointA), transform.TransformPoint(pointB));
-            if (newTriangle)
-            {
-                Debug.DrawLine(transform.TransformPoint(underwaterPoints[1 - indexStartingFloatingPoint]), transform.TransformPoint(underwaterPoints[indexStartingFloatingPoint]), Color.red);
-                Debug.DrawLine(transform.TransformPoint(underwaterPoints[1 - indexStartingFloatingPoint]), transform.TransformPoint(pointB), Color.red);
-                Debug.DrawLine(transform.TransformPoint(underwaterPoints[indexStartingFloatingPoint]), transform.TransformPoint(pointB), Color.red);
-                polygons.Add(new Triangle(0, underwaterPoints[1 - indexStartingFloatingPoint], underwaterPoints[indexStartingFloatingPoint], pointB));
-            }
-        }
-        else if (FloaterHelper.showRays) Debug.Log("All three points underwater");
-
-    }
 
     public static Vector3 PointAdjacentOnEdge(Triangle triangle, Triangle waterTriangle, Vector3 point)
     {

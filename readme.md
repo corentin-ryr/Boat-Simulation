@@ -2,9 +2,9 @@
 
 This is a simulation of the buoyancy on mesh objects. This method is applicable to any mesh to simulate a floating behaviour. This method works for a moving water surface.
 
-<p align="center">
-    <img src="Images/Intro.gif" >
-</p>
+
+<video src="Images/demo1.mp4" controls="controls" style="max-width: 730px;">
+</video>
 
 # The method
 
@@ -16,7 +16,7 @@ To find the immersed part of the mesh, we compute the intersection between the w
     <img src="Images/intersectionLine.png" width="400">
 </p>
 
-From this chain, we can get the triangles of the floating mesh that are bellow the water line and we can triangulate the chain to have the surface of the displaced water.
+From this chain, we can get the triangles of the floating mesh that are bellow the water line and we can triangulate the chain to have the surface of the displaced water. We compute a third set of triangles made of the triangles cut by the intersection line. 
 
 <p align="center">
     <img src="Images/intersectionMesh.png" width="400">

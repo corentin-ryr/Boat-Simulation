@@ -154,7 +154,14 @@ public class Floater : MonoBehaviour
         if (showCandidatesWater) DebugHelper.ShowMesh(triangleCandidateWater.ToArray(), transform, Color.blue);
 
         //TODO sometimes it bugs
-        (chain, triangleRing) = FloaterHelper.ComputeIntersectingLine(gridCells);
+        try
+        {
+            (chain, triangleRing) = FloaterHelper.ComputeIntersectingLine(gridCells);
+        }
+        catch (System.Exception)
+        {
+            Debug.Log("Case 0 encountered.");
+        }
 
         // If there is no chain, there is no intersection so we are either fully submerge or fully out
         if (chain == null)
@@ -433,7 +440,11 @@ public class Floater : MonoBehaviour
         }
 
         //We have an initial triangle underwater
-        if (!TriangleUnderWater(currentTriangle)) Debug.Log("No triangle underwater");
+        if (!TriangleUnderWater(currentTriangle))
+        {
+            Debug.Log("No triangle underwater");
+            return bottomHalf.ToArray();
+        }
 
         //We have an initial triangle underwater
         Q.Enqueue(currentTriangle);
@@ -476,8 +487,8 @@ public class Floater : MonoBehaviour
 
             boatRigidbody.AddForceAtPosition(totalVolume * 1000 * 9.81f * transform.TransformDirection(waterIntersectionNormal), transform.TransformPoint(newBarycentre));
 
-            boatRigidbody.AddForce(transform.TransformDirection(linearDragBoat + linearDragSea + linearDragIntermediate));
-            boatRigidbody.AddTorque(transform.TransformDirection(angularDragSea + angularDragBoat + angularDragIntermediate));
+            // boatRigidbody.AddForce(transform.TransformDirection(linearDragBoat + linearDragSea + linearDragIntermediate));
+            // boatRigidbody.AddTorque(transform.TransformDirection(angularDragSea + angularDragBoat + angularDragIntermediate));
 
             forceOrigin.Add(transform.TransformPoint(newBarycentre));
             forceOrigin.Add(transform.position);
@@ -491,8 +502,8 @@ public class Floater : MonoBehaviour
 
             boatRigidbody.AddForceAtPosition(volume * 1000 * 9.91f * Vector3.up, transform.TransformPoint(barycentre));
 
-            boatRigidbody.AddForce(transform.TransformDirection(linearDragBoat));
-            boatRigidbody.AddTorque(transform.TransformDirection(angularDragBoat));
+            // boatRigidbody.AddForce(transform.TransformDirection(linearDragBoat));
+            // boatRigidbody.AddTorque(transform.TransformDirection(angularDragBoat));
 
             forceOrigin.Add(transform.TransformPoint(newBarycentre));
             forceOrigin.Add(transform.position);
