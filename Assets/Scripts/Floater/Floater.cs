@@ -156,7 +156,7 @@ public class Floater : MonoBehaviour
         //TODO sometimes it bugs
         try
         {
-            (chain, triangleRing) = FloaterHelper.ComputeIntersectingLine(gridCells);
+            (chain, triangleRing) = FloaterHelper.ComputeIntersectingLine(gridCells, transform);
         }
         catch (System.Exception)
         {
@@ -208,7 +208,7 @@ public class Floater : MonoBehaviour
     #region Precomputations ======================================================================================
     private void MeshDataPrecomputation() //Executing once the mesh has been created
     {
-        floatingMesh = MeshHelper.WeldVertices(floatingMesh, 1E-5f);
+        floatingMesh = MeshHelper.WeldVertices(floatingMesh);
         (barycentre, volume) = MeshHelper.ComputeVolumeAndBarycentre(floatingMesh.vertices, floatingMesh.triangles, transform);
 
         //Precomputing the triangle neighbor relations and the background grid (only once at the beginning because we suppose that the mesh does not change)
@@ -487,7 +487,7 @@ public class Floater : MonoBehaviour
 
             boatRigidbody.AddForceAtPosition(totalVolume * 1000 * 9.81f * transform.TransformDirection(waterIntersectionNormal), transform.TransformPoint(newBarycentre));
 
-            // boatRigidbody.AddForce(transform.TransformDirection(linearDragBoat + linearDragSea + linearDragIntermediate));
+            // boatRigidbody.AddForce(transform.TransformDirection(linearDragBoat + linearDragIntermediate)); // We don't add sea because it's inside the mesh and doesn't contribute to drag
             // boatRigidbody.AddTorque(transform.TransformDirection(angularDragSea + angularDragBoat + angularDragIntermediate));
 
             forceOrigin.Add(transform.TransformPoint(newBarycentre));

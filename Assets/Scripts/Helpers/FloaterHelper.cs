@@ -7,7 +7,7 @@ public static class FloaterHelper
 {
     //Triangle1 is from the boat and triangle2 is from the water
     //TODO compute cases 3 and 4
-    public static (int, Triangle[], bool, Triangle) IdentifyCase(Triangle triangle1, Triangle triangle2, ref Vector3 P, bool swaped)
+    public static (int, Triangle[], bool, Triangle) IdentifyCase(Triangle triangle1, Triangle triangle2, ref Vector3 P, bool swaped, Transform debugTransform = null)
     {
         Vector3 a = triangle1.Vertex1;
         Vector3 b = triangle1.Vertex2;
@@ -18,76 +18,70 @@ public static class FloaterHelper
 
         //Case 1 if p is inside of triangle1 
         Triangle[] triangleIndicesToCheck1 = null;
-        Vector3 tempP1 = Vector3.negativeInfinity;
-        bool case1 = false;
-        if (IntersectionEdgeTriangle(a, b, c, d, e, ref tempP1, P))
+        Vector3? case1Vec;
+        if ((case1Vec = IntersectionEdgeTriangle(a, b, c, d, e, P)) is not null)
         {
-            case1 = true;
             triangleIndicesToCheck1 = new Triangle[] { triangle2.T1 };
         }
-        else if (IntersectionEdgeTriangle(a, b, c, e, f, ref tempP1, P))
+        else if ((case1Vec = IntersectionEdgeTriangle(a, b, c, e, f, P)) is not null)
         {
-            case1 = true;
             triangleIndicesToCheck1 = new Triangle[] { triangle2.T2 };
         }
-        else if (IntersectionEdgeTriangle(a, b, c, f, d, ref tempP1, P))
+        else if ((case1Vec = IntersectionEdgeTriangle(a, b, c, f, d, P)) is not null)
         {
-            case1 = true;
             triangleIndicesToCheck1 = new Triangle[] { triangle2.T3 };
         }
 
 
         //Case 2 if p is inside of triangle2
         Triangle[] triangleIndicesToCheck2 = null;
-        Vector3 tempP2 = Vector3.negativeInfinity;
-        bool case2 = false;
-        if (IntersectionEdgeTriangle(d, e, f, a, b, ref tempP2, P))
+        Vector3? case2Vec = null;
+        if ((case2Vec = IntersectionEdgeTriangle(d, e, f, a, b, P)) is not null)
         {
-            case2 = true;
             triangleIndicesToCheck2 = new Triangle[] { triangle1.T1 };
         }
-        else if (IntersectionEdgeTriangle(d, e, f, b, c, ref tempP2, P))
+        else if ((case2Vec = IntersectionEdgeTriangle(d, e, f, b, c, P)) is not null)
         {
-            case2 = true;
             triangleIndicesToCheck2 = new Triangle[] { triangle1.T2 };
         }
-        else if (IntersectionEdgeTriangle(d, e, f, c, a, ref tempP2, P))
+        else if ((case2Vec = IntersectionEdgeTriangle(d, e, f, c, a, P)) is not null)
         {
-            case2 = true;
             triangleIndicesToCheck2 = new Triangle[] { triangle1.T3 };
         }
 
         Triangle nextTriangleToCheckAgainst;
-        
+
         //Case 3 if p lies in the other triangle
-        if (case2) {
-            if(tempP2 == a || tempP2 == b || tempP2 == c) {
-                P = tempP2;
+        if (case2Vec is not null)
+        {
+            if (case2Vec == a || case2Vec == b || case2Vec == c)
+            {
+                P = (Vector3)case2Vec;
                 triangleIndicesToCheck1 = FindTriangleCommonPoint(triangle1, P);
                 nextTriangleToCheckAgainst = triangle2;
                 return (3, triangleIndicesToCheck1, swaped, nextTriangleToCheckAgainst);
             }
         }
 
-        if (case1 && case2 && tempP1 == tempP2) //Case when we have the point on the edge of the two triangles.
+        if (case1Vec is not null && case2Vec is not null && case1Vec == case2Vec) //Case when we have the point on the edge of the two triangles.
         {
             nextTriangleToCheckAgainst = triangleIndicesToCheck2[0];
             swaped = !swaped;
-            P = tempP1;
-            return (1, triangleIndicesToCheck1, swaped, nextTriangleToCheckAgainst); //We act like a case 1 but we have a special triangleToCheck
+            P = (Vector3)case1Vec;
+            return (5, triangleIndicesToCheck1, swaped, nextTriangleToCheckAgainst); //We act like a case 1 but we have a special triangleToCheck
         }
-        
-        if (case1) //Case 1, we have to swap and we set the triangle to check next
+
+        if (case1Vec is not null) //Case 1, we have to swap and we set the triangle to check next
         {
             swaped = !swaped;
             nextTriangleToCheckAgainst = triangle1;
-            P = tempP1;
+            P = (Vector3)case1Vec;
             return (1, triangleIndicesToCheck1, swaped, nextTriangleToCheckAgainst);
         }
-        
-        if (case2)//Case 2, we don't swap and we also set the next triangle to check
+
+        if (case2Vec is not null)//Case 2, we don't swap and we also set the next triangle to check
         {
-            P = tempP2;
+            P = (Vector3)case2Vec;
             nextTriangleToCheckAgainst = triangle2;
             return (2, triangleIndicesToCheck2, swaped, nextTriangleToCheckAgainst);
         }
@@ -95,32 +89,36 @@ public static class FloaterHelper
         return (0, triangleIndicesToCheck1, swaped, null);
     }
 
-    public static bool IntersectionEdgeTriangle(Vector3 a, Vector3 b, Vector3 c, Vector3 d, Vector3 e, ref Vector3 newP, Vector3 previousP)
+    public static Vector3? IntersectionEdgeTriangle(Vector3 a, Vector3 b, Vector3 c, Vector3 d, Vector3 e, Vector3 previousP)
     {
-        Vector3 n = Vector3.Cross(a - b, a - c);
+        Vector3 n = Vector3.Cross(a - b, a - c).normalized;
 
         float E = Vector3.Dot(a - e, n);
         float D = Vector3.Dot(a - d, n);
         //Are d and e on different side of triangle abc ?
-        if (D * E > 0) return false;
+        if (D * E > 0) return null;
 
         float t = D / (D - E);
         Vector3 p = t * e + (1 - t) * d;
+        if (p == previousP) return null;
 
-        if (Vector3.Dot(Vector3.Cross(a - b, a - p), n) < 0 ||
-            Vector3.Dot(Vector3.Cross(b - c, b - p), n) < 0 ||
-            Vector3.Dot(Vector3.Cross(c - a, c - p), n) < 0) return false;
+        // if ((a - b).normalized == (a - p).normalized ||
+        //     (b - c).normalized == (b - p).normalized ||
+        //     (c - a).normalized == (c - p).normalized)
+        // {
+        //     Debug.Log("On edge");
+        // }
 
-        if (p == previousP)
-        {
-            return false;
-        }
-        newP = p;
-        return true;
+        if (((a - b).normalized != (a - p).normalized && Vector3.Dot(Vector3.Cross((a - b).normalized, (a - p).normalized), n) < 0) ||
+            ((b - c).normalized != (b - p).normalized && Vector3.Dot(Vector3.Cross((b - c).normalized, (b - p).normalized), n) < 0) ||
+            ((c - a).normalized != (c - p).normalized && Vector3.Dot(Vector3.Cross((c - a).normalized, (c - p).normalized), n) < 0)) return null;
+
+        return p;
     }
 
     // For the case 3 we need to find all the triangles that touch the point "commonPoint".
-    private static Triangle[] FindTriangleCommonPoint(Triangle startTriangle, Vector3 commonPoint) {
+    private static Triangle[] FindTriangleCommonPoint(Triangle startTriangle, Vector3 commonPoint)
+    {
         List<Triangle> touchingTriangles = new List<Triangle>();
 
         //Find a point underwater
@@ -179,7 +177,7 @@ public static class FloaterHelper
 
 
 
-    public static (List<Vector3>, List<Triangle>) ComputeIntersectingLine(Cell[] gridCells)
+    public static (List<Vector3>, List<Triangle>) ComputeIntersectingLine(Cell[] gridCells, Transform debugTransform)
     {
         List<Vector3> chain = new List<Vector3>();
 
@@ -208,15 +206,15 @@ public static class FloaterHelper
 
         Vector3? vectorClosestToStart = null;
         //We have the first triangle, we start looping
-        for (int i = 0; i < 100; i++) //Max number of iteration (security)
+        for (int i = 0; i < 1000; i++) //Max number of iteration (security)
         {
+            Color color = Color.Lerp(Color.black, Color.white, (float)i / (float)(chain.Count - 1));
             foreach (Triangle currentTriangle in currentTriangles)
             {
                 bool nextSwap;
                 int currentCase;
-                (currentCase, nextCurrentTriangles, nextSwap, nextTriangleToCheckAgainst) = IdentifyCase(currentTriangle, triangleToCheckAgainst, ref currentP, swaped);
-                // Debug.Log("Index: " + i);
-                // Debug.Log(currentCase + "\n");
+
+                (currentCase, nextCurrentTriangles, nextSwap, nextTriangleToCheckAgainst) = IdentifyCase(currentTriangle, triangleToCheckAgainst, ref currentP, swaped, debugTransform);
                 if (currentCase > 0)
                 {
                     Triangle waterTriangle = swaped ? currentTriangle : triangleToCheckAgainst;
@@ -260,7 +258,7 @@ public static class FloaterHelper
                         else Debug.Log("All three points underwater");
 
                     }
-                    if (changeFloatingTriangle) 
+                    if (changeFloatingTriangle)
                     {
                         vectorClosestToStart = FloaterHelper.PointAdjacentOnEdge(nextSwap ? nextTriangleToCheckAgainst : nextCurrentTriangles[0], nextSwap ? nextCurrentTriangles[0] : nextTriangleToCheckAgainst, currentP);
                     }
@@ -269,13 +267,14 @@ public static class FloaterHelper
                     swaped = nextSwap;
                     triangleToCheckAgainst = nextTriangleToCheckAgainst;
                     currentTriangles = nextCurrentTriangles;
+
                     break; // No need to check the other potential triangles
                 }
             }
-            
+
             if (nextCurrentTriangles is null) throw new System.Exception("Error during the intersection computation");
             if (chain.Count > 1 && (currentP == chain[0])) break;
-            if (i == 99) Debug.Log("Max number of iteration reached");
+            if (i == 999) Debug.Log("Max number of iteration reached");
         }
 
         return (chain, lowerRing);

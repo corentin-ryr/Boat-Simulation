@@ -40,7 +40,7 @@ public static class DebugHelper
 
     public static void ShowMesh(Triangle[] triangles, Transform transform, Color color, bool verbose = true)
     {
-        if (verbose) Debug.Log("Number of candidates: " + triangles.Length);
+        // if (verbose) Debug.Log("Number of candidates: " + triangles.Length);
         for (int i = 0; i < triangles.Length; i++)
         {
             Vector3 vertex0 = transform.TransformPoint(triangles[i].Vertex1);

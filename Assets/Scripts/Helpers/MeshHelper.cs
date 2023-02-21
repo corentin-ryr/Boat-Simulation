@@ -293,7 +293,7 @@ public static class MeshHelper
         return (barycentre, volume, linearDrag, angularDrag);
     }
 
-    public static Mesh WeldVertices(Mesh aMesh, float aMaxDelta = 0.01f)
+    public static Mesh WeldVertices(Mesh aMesh)
     {
         var verts = aMesh.vertices;
         Dictionary<Vector3, int> duplicateHashTable = new Dictionary<Vector3, int>();
