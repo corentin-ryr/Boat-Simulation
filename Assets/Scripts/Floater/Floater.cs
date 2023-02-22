@@ -10,8 +10,8 @@ public class Floater : MonoBehaviour
     #region Variables =====================================================================================
 
     //Internal variables of the mesh
-    float volume;
-    float totalVolume;
+    float fullVolume;
+    float immersedVolume;
     Vector3 barycentre;
     Vector3 newBarycentre;
     bool meshReady; //Set after the event
@@ -22,6 +22,9 @@ public class Floater : MonoBehaviour
     Cell[] gridCells;
     Triangle[] triangleCandidateBoat;
     List<Triangle> triangleCandidateWater;
+
+    List<Vector3> lastFewBuoyancy = new List<Vector3>();
+    List<Vector3> lastFewBarycentre = new List<Vector3>();
 
     List<Vector3> chain;
     // List<Vector3> lowerChain;
@@ -108,12 +111,7 @@ public class Floater : MonoBehaviour
 
         smoothedVector = new MovingAverage(5);
 
-        if (floatingMesh != null)
-        {
-            MeshDataPrecomputation();
-            meshReady = true;
-        }
-
+        if (floatingMesh != null) MeshDataPrecomputation();
     }
 
 
@@ -123,9 +121,9 @@ public class Floater : MonoBehaviour
 
         if (showStatValues) //Used to check if the volume and barycentre computation is working well
         {
-            UnityEngine.Debug.Log("Full volume " + volume);
+            UnityEngine.Debug.Log("Full volume " + fullVolume);
             UnityEngine.Debug.Log("Geometric center of the boat " + barycentre);
-            UnityEngine.Debug.Log("Immersed volume " + totalVolume);
+            UnityEngine.Debug.Log("Immersed volume " + immersedVolume);
             UnityEngine.Debug.Log("Geometric center of the immersed part " + newBarycentre);
         }
 
@@ -209,7 +207,7 @@ public class Floater : MonoBehaviour
     private void MeshDataPrecomputation() //Executing once the mesh has been created
     {
         floatingMesh = MeshHelper.WeldVertices(floatingMesh);
-        (barycentre, volume) = MeshHelper.ComputeVolumeAndBarycentre(floatingMesh.vertices, floatingMesh.triangles, transform);
+        (barycentre, fullVolume) = MeshHelper.ComputeVolumeAndBarycentre(floatingMesh.vertices, floatingMesh.triangles, transform);
 
         //Precomputing the triangle neighbor relations and the background grid (only once at the beginning because we suppose that the mesh does not change)
         boatTriangleNeighbors = MeshHelper.FindTriangleNeighbors(floatingMesh);
@@ -482,25 +480,41 @@ public class Floater : MonoBehaviour
             (Vector3 barycentreSea, float volumeSea, Vector3 linearDragSea, Vector3 angularDragSea) = MeshHelper.ComputeVolumeAndBarycentre(trianglesSea, localVelocity, localAngularVelocity, C, 1.2f, 1E-5f);
             (Vector3 barycentreIntermediate, float volumeIntermediate, Vector3 linearDragIntermediate, Vector3 angularDragIntermediate) = MeshHelper.ComputeVolumeAndBarycentre(intermediate, localVelocity, localAngularVelocity, C, 1.2f, 1E-5f);
 
-            totalVolume = volumeSea + volumeBoat + volumeIntermediate;
-            newBarycentre = (barycentreBoat * volumeBoat + barycentreSea * volumeSea + barycentreIntermediate * volumeIntermediate) / totalVolume;
+            immersedVolume = volumeSea + volumeBoat + volumeIntermediate;
+            newBarycentre = (barycentreBoat * volumeBoat + barycentreSea * volumeSea + barycentreIntermediate * volumeIntermediate) / immersedVolume;
 
-            boatRigidbody.AddForceAtPosition(totalVolume * 1000 * 9.81f * transform.TransformDirection(waterIntersectionNormal), transform.TransformPoint(newBarycentre));
+            lastFewBuoyancy.Add(immersedVolume * 1000 * 9.81f * transform.TransformDirection(waterIntersectionNormal));
+            lastFewBuoyancy = lastFewBuoyancy.Skip(Math.Max(0, lastFewBuoyancy.Count() - 4)).ToList();
+            Vector3 buoyancyForce = WeightedMean(lastFewBuoyancy);
+
+            lastFewBarycentre.Add(transform.TransformPoint(newBarycentre));
+            lastFewBarycentre = lastFewBarycentre.Skip(Math.Max(0, lastFewBarycentre.Count() - 4)).ToList();
+            Vector3 barycentre = WeightedMean(lastFewBarycentre);
+
+            boatRigidbody.AddForceAtPosition(buoyancyForce, barycentre);
 
             // boatRigidbody.AddForce(transform.TransformDirection(linearDragBoat + linearDragIntermediate)); // We don't add sea because it's inside the mesh and doesn't contribute to drag
             // boatRigidbody.AddTorque(transform.TransformDirection(angularDragSea + angularDragBoat + angularDragIntermediate));
 
-            forceOrigin.Add(transform.TransformPoint(newBarycentre));
+            forceOrigin.Add(barycentre);
             forceOrigin.Add(transform.position);
 
-            forceDirection.Add(totalVolume * 9.81f * transform.TransformDirection(waterIntersectionNormal));
+            forceDirection.Add(buoyancyForce);
             forceDirection.Add(transform.TransformDirection(linearDragBoat + linearDragSea + linearDragIntermediate));
         }
         else
         {
             (Vector3 barycentreBoat, float volumeBoat, Vector3 linearDragBoat, Vector3 angularDragBoat) = MeshHelper.ComputeVolumeAndBarycentre(boatTriangleNeighbors, localVelocity, localAngularVelocity, C);
 
-            boatRigidbody.AddForceAtPosition(volume * 1000 * 9.91f * Vector3.up, transform.TransformPoint(barycentre));
+            lastFewBuoyancy.Add(volumeBoat * 1000 * 9.81f * Vector3.up);
+            lastFewBuoyancy = lastFewBuoyancy.Skip(Math.Max(0, lastFewBuoyancy.Count() - 4)).ToList();
+            Vector3 buoyancyForce = WeightedMean(lastFewBuoyancy);
+
+            lastFewBarycentre.Add(transform.TransformPoint(barycentreBoat));
+            lastFewBarycentre = lastFewBarycentre.Skip(Math.Max(0, lastFewBarycentre.Count() - 4)).ToList();
+            Vector3 barycentre = WeightedMean(lastFewBarycentre);
+
+            boatRigidbody.AddForceAtPosition(volumeBoat * 1000 * 9.91f * Vector3.up, barycentre);
 
             // boatRigidbody.AddForce(transform.TransformDirection(linearDragBoat));
             // boatRigidbody.AddTorque(transform.TransformDirection(angularDragBoat));
@@ -508,7 +522,7 @@ public class Floater : MonoBehaviour
             forceOrigin.Add(transform.TransformPoint(newBarycentre));
             forceOrigin.Add(transform.position);
 
-            forceDirection.Add(volume * 1000 * 9.91f * Vector3.up);
+            forceDirection.Add(fullVolume * 1000 * 9.91f * Vector3.up);
             forceDirection.Add(transform.TransformDirection(linearDragBoat));
         }
 
@@ -549,6 +563,21 @@ public class Floater : MonoBehaviour
 
         return true;
     }
+
+    private Vector3 WeightedMean(List<Vector3> vectorList) {
+        Vector3 average = Vector3.zero;
+        float sumWeights = 0;
+        for (int i = 0; i < vectorList.Count; i++)
+        {
+            float weight = 1 / Mathf.Pow(vectorList.Count - i, 2);
+            sumWeights += weight;
+            average += weight * vectorList[i];
+        }
+
+        average /= sumWeights;
+        return average;
+    }
+
 
     #endregion
 
