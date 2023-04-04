@@ -23,8 +23,9 @@ public class Floater : MonoBehaviour
     Triangle[] triangleCandidateBoat;
     List<Triangle> triangleCandidateWater;
 
-    List<Vector3> lastFewBuoyancy = new List<Vector3>();
-    List<Vector3> lastFewBarycentre = new List<Vector3>();
+    RealTimeVector3DSmoother smoothBuoyancy = new RealTimeVector3DSmoother(3);
+    RealTimeVector3DSmoother smoothBarycentre = new RealTimeVector3DSmoother(3);
+
 
     List<Vector3> chain;
     // List<Vector3> lowerChain;
@@ -483,14 +484,8 @@ public class Floater : MonoBehaviour
             immersedVolume = volumeSea + volumeBoat + volumeIntermediate;
             newBarycentre = (barycentreBoat * volumeBoat + barycentreSea * volumeSea + barycentreIntermediate * volumeIntermediate) / immersedVolume;
 
-            lastFewBuoyancy.Add(immersedVolume * 1000 * 9.81f * transform.TransformDirection(waterIntersectionNormal));
-            lastFewBuoyancy = lastFewBuoyancy.Skip(Math.Max(0, lastFewBuoyancy.Count() - 4)).ToList();
-            Vector3 buoyancyForce = WeightedMean(lastFewBuoyancy);
-
-            lastFewBarycentre.Add(transform.TransformPoint(newBarycentre));
-            lastFewBarycentre = lastFewBarycentre.Skip(Math.Max(0, lastFewBarycentre.Count() - 4)).ToList();
-            Vector3 barycentre = WeightedMean(lastFewBarycentre);
-
+            Vector3 buoyancyForce = smoothBuoyancy.Smooth(immersedVolume * 1000 * 9.81f * transform.TransformDirection(waterIntersectionNormal));
+            Vector3 barycentre = smoothBarycentre.Smooth(transform.TransformPoint(newBarycentre));
             boatRigidbody.AddForceAtPosition(buoyancyForce, barycentre);
 
             // boatRigidbody.AddForce(transform.TransformDirection(linearDragBoat + linearDragIntermediate)); // We don't add sea because it's inside the mesh and doesn't contribute to drag
@@ -506,23 +501,17 @@ public class Floater : MonoBehaviour
         {
             (Vector3 barycentreBoat, float volumeBoat, Vector3 linearDragBoat, Vector3 angularDragBoat) = MeshHelper.ComputeVolumeAndBarycentre(boatTriangleNeighbors, localVelocity, localAngularVelocity, C);
 
-            lastFewBuoyancy.Add(volumeBoat * 1000 * 9.81f * Vector3.up);
-            lastFewBuoyancy = lastFewBuoyancy.Skip(Math.Max(0, lastFewBuoyancy.Count() - 4)).ToList();
-            Vector3 buoyancyForce = WeightedMean(lastFewBuoyancy);
-
-            lastFewBarycentre.Add(transform.TransformPoint(barycentreBoat));
-            lastFewBarycentre = lastFewBarycentre.Skip(Math.Max(0, lastFewBarycentre.Count() - 4)).ToList();
-            Vector3 barycentre = WeightedMean(lastFewBarycentre);
-
-            boatRigidbody.AddForceAtPosition(volumeBoat * 1000 * 9.91f * Vector3.up, barycentre);
+            Vector3 buoyancyForce = smoothBuoyancy.Smooth(volumeBoat * 1000 * 9.81f * Vector3.up);
+            Vector3 barycentre = smoothBarycentre.Smooth(transform.TransformPoint(barycentreBoat));
+            boatRigidbody.AddForceAtPosition(buoyancyForce, barycentre);
 
             // boatRigidbody.AddForce(transform.TransformDirection(linearDragBoat));
             // boatRigidbody.AddTorque(transform.TransformDirection(angularDragBoat));
 
-            forceOrigin.Add(transform.TransformPoint(newBarycentre));
+            forceOrigin.Add(barycentre);
             forceOrigin.Add(transform.position);
 
-            forceDirection.Add(fullVolume * 1000 * 9.91f * Vector3.up);
+            forceDirection.Add(buoyancyForce);
             forceDirection.Add(transform.TransformDirection(linearDragBoat));
         }
 
@@ -563,21 +552,6 @@ public class Floater : MonoBehaviour
 
         return true;
     }
-
-    private Vector3 WeightedMean(List<Vector3> vectorList) {
-        Vector3 average = Vector3.zero;
-        float sumWeights = 0;
-        for (int i = 0; i < vectorList.Count; i++)
-        {
-            float weight = 1 / Mathf.Pow(vectorList.Count - i, 2);
-            sumWeights += weight;
-            average += weight * vectorList[i];
-        }
-
-        average /= sumWeights;
-        return average;
-    }
-
 
     #endregion
 
@@ -650,4 +624,28 @@ public class Floater : MonoBehaviour
     }
 
     #endregion
+}
+
+public class RealTimeVector3DSmoother {
+    private readonly Vector3[] window;
+    private int currentIndex;
+    private readonly int windowSize;
+
+    public RealTimeVector3DSmoother(int windowSize) {
+        window = new Vector3[windowSize];
+        currentIndex = 0;
+        this.windowSize = windowSize;
+    }
+
+    public Vector3 Smooth(Vector3 inputVector) {
+        window[currentIndex] = inputVector;
+        currentIndex = (currentIndex + 1) % windowSize;
+
+        Vector3 sum = Vector3.zero;
+        for (int i = 0; i < windowSize; i++) {
+            sum += window[i];
+        }
+
+        return sum / windowSize;
+    }
 }

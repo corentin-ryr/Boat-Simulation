@@ -1,0 +1,181 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!21 &2100000
+Material:
+  serializedVersion: 8
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_Name: TownScape_Fence
+  m_Shader: {fileID: -6465566751694194690, guid: 95f56a5a9f931c246be93e2fa6e8f670,
+    type: 3}
+  m_ValidKeywords: []
+  m_InvalidKeywords:
+  - _SPECULAR_COLOR
+  m_LightmapFlags: 4
+  m_EnableInstancingVariants: 0
+  m_DoubleSidedGI: 1
+  m_CustomRenderQueue: -1
+  stringTagMap: {}
+  disabledShaderPasses: []
+  m_SavedProperties:
+    serializedVersion: 3
+    m_TexEnvs:
+    - Texture2D_1d72d148507144f48d58abf2b7510be7:
+        m_Texture: {fileID: 2800000, guid: 957739981f05b804f8575237c4290d88, type: 3}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - Texture2D_8de38b3969054a568a2af526c83b3440:
+        m_Texture: {fileID: 2800000, guid: 1d3e78eff1a7cec4c97e9aae70010558, type: 3}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - Texture2D_ab3bf60df9e04671aa16f258fdb8fb85:
+        m_Texture: {fileID: 2800000, guid: 36777c28c0b35cf46af9010b94add521, type: 3}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _BaseMap:
+        m_Texture: {fileID: 2800000, guid: 1d3e78eff1a7cec4c97e9aae70010558, type: 3}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _BumpMap:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _DetailAlbedoMap:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _DetailMask:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _DetailNormalMap:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _EmissionMap:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _MainTex:
+        m_Texture: {fileID: 2800000, guid: 1d3e78eff1a7cec4c97e9aae70010558, type: 3}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _MetallicGlossMap:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _OcclusionMap:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _ParallaxMap:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _SpecGlossMap:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - unity_Lightmaps:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - unity_LightmapsInd:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - unity_ShadowMasks:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    m_Ints: []
+    m_Floats:
+    - Vector1_052ecaa37b534102b1524387ce403ee9: 0.12
+    - Vector1_2c7300b31dfa4f78ad135c9565f8c5ba: 0
+    - Vector1_33895edd50814ce3950da47bd5a1e6b4: 0.9
+    - Vector1_37b1d38951f247868e40247832bf8518: 1
+    - Vector1_41a07006d8b54ea38633f77631770798: 0.2
+    - Vector1_88713da8b29940dfbb8dc6b30e9226ef: 1
+    - Vector1_8b38ad99f47f4084971a5ef5f5a274b7: 1
+    - Vector1_90b5a7bc26bf4f3f89aca768803bdfb4: 10
+    - Vector1_924cacf1e2214c2796abed91ad5891ae: 1
+    - Vector1_9b76a83ccb6a4a4ea7efc727666eacdc: 0
+    - Vector1_9ce788b0256041058f9aa55485998b3b: 1
+    - Vector1_a156ab62f31742febda444c090ee28aa: 0
+    - Vector1_a7553e72dc2b479e90205279cfe51d4b: 1
+    - Vector1_ad03bf7def1c476abda5ca5d49192434: 1
+    - Vector1_b254d52fb7074980b84436b587f65662: 0
+    - Vector1_dd0878415c7a43bc9030eca640c7be0e: 1
+    - Vector1_ee2b824c337443098047d808ca19688f: 1
+    - _AlphaClip: 1
+    - _Blend: 0
+    - _BlendOp: 0
+    - _BumpScale: 1
+    - _CameraFadingEnabled: 0
+    - _CameraFarFadeDistance: 2
+    - _CameraNearFadeDistance: 1
+    - _ClearCoatMask: 0
+    - _ClearCoatSmoothness: 0
+    - _ColorMode: 0
+    - _Cull: 0
+    - _Cutoff: 1
+    - _DetailAlbedoMapScale: 1
+    - _DetailNormalMapScale: 1
+    - _DistortionBlend: 0.5
+    - _DistortionEnabled: 0
+    - _DistortionStrength: 1
+    - _DistortionStrengthScaled: 0.1
+    - _DstBlend: 10
+    - _EnvironmentReflections: 0
+    - _FlipbookBlending: 0
+    - _FlipbookMode: 0
+    - _GlossMapScale: 0
+    - _Glossiness: 0
+    - _GlossyReflections: 0
+    - _Metallic: 0.054
+    - _Mode: 0
+    - _OcclusionStrength: 1
+    - _Parallax: 0.005
+    - _QueueControl: 0
+    - _QueueOffset: 0
+    - _ReceiveShadows: 1
+    - _Smoothness: 0
+    - _SmoothnessSource: 0
+    - _SmoothnessTextureChannel: 0
+    - _SoftParticlesEnabled: 0
+    - _SoftParticlesFarFadeDistance: 1
+    - _SoftParticlesNearFadeDistance: 0
+    - _SpecularHighlights: 0
+    - _SrcBlend: 5
+    - _Surface: 1
+    - _WorkflowMode: 1
+    - _ZWrite: 0
+    m_Colors:
+    - Color_096d9124f2094422a1d0049e8c739071: {r: 0, g: 0, b: 0, a: 0}
+    - Color_6c2cbba8cf7c4010b1a8eb1dba78e329: {r: 0, g: 0, b: 0, a: 0}
+    - Color_ae0ee7d65c54403e8c0a9fe9ebce9cf8: {r: 0.7411765, g: 1, b: 0.7019608, a: 0}
+    - Color_e7383b7ebe704117af1bab224c0e6445: {r: 1, g: 0.025235612, b: 0, a: 0}
+    - Vector2_e8677bdde144473db47ad3f7a967260c: {r: 0, g: 0, b: 0, a: 0}
+    - _BaseColor: {r: 0.09433961, g: 0.09433961, b: 0.09433961, a: 1}
+    - _BaseColorAddSubDiff: {r: 0, g: 0, b: 0, a: 0}
+    - _CameraFadeParams: {r: 0, g: Infinity, b: 0, a: 0}
+    - _Color: {r: 1, g: 1, b: 1, a: 1}
+    - _EmissionColor: {r: 967.7804, g: 967.7804, b: 967.7804, a: 1}
+    - _SoftParticleFadeParams: {r: 0, g: 0, b: 0, a: 0}
+    - _SpecColor: {r: 0.19999984, g: 0.19999984, b: 0.19999984, a: 0}
+  m_BuildTextureStacks: []
+--- !u!114 &1654939748606910716
+MonoBehaviour:
+  m_ObjectHideFlags: 11
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d0353a89b1f911e48b9e16bdc9f2e058, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  version: 5

@@ -35,3 +35,4 @@ This algorithm is more computationaly expensive than some simpler approximations
 -   [1] S. H. Lo and W. X. Wang. 2004. A fast robust algorithm for the intersection of triangulated surfaces. Eng. with Comput. 20, 1 (March 2004), 11–21.
 -   [2] Cha Zhang and Tsuhan Chen, "Efficient feature extraction for 2D/3D objects in mesh representation," Proceedings 2001 International Conference on Image Processing (Cat. No.01CH37205), 2001, pp. 935-938 vol.3, doi: 10.1109/ICIP.2001.958278.
 -   [3] White, F. M. (1974). Viscous fluid flow. New York: McGraw-Hill.
+-   [4] https://alexanderameye.github.io/notes/stylized-water-shader/

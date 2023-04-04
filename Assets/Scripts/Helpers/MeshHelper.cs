@@ -350,7 +350,7 @@ public static class MeshHelper
             for (int x = 0; x <= xSize; x++, i++)
             {
                 vertices[i] = new Vector3(x / (float)xSize * width - width / 2, 0, y / (float)xSize * width - width / 2);
-                uvs[i] = new Vector2(x / (float)xSize, y / (float)ySize);
+                uvs[i] = new Vector2(1 - x / (float)xSize, 1 - y / (float)ySize);
             }
         }
 

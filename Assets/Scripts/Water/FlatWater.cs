@@ -23,6 +23,8 @@ public class FlatWater : MonoBehaviour, IWater
 
     [Header("Parameters")]
     public float waterAmplitude;
+    public int numGrid = 20;
+    public float mapSize = 10;
 
 
 
@@ -31,37 +33,38 @@ public class FlatWater : MonoBehaviour, IWater
     {
         meshFilter = GetComponent<MeshFilter>();
 
-        (Vector3[] vertices, int[] triangles, Vector2[] uvs) = MeshHelper.GenerateGridMesh(20, 20, 20);
+        (Vector3[] vertices, int[] triangles, Vector2[] uvs) = MeshHelper.GenerateGridMesh(mapSize, numGrid, numGrid);
         meshFilter.mesh.vertices = vertices;
         meshFilter.mesh.triangles = triangles;
         meshFilter.mesh.uv = uvs;
+        meshFilter.mesh.RecalculateNormals();
 
         heightMap = new float[vertices.Length];
 
         gameObject.layer = 4; //4 is Water
 
-        MeshDataPrecomputation();
+        // MeshDataPrecomputation();
     }
 
 
     void FixedUpdate()
     {
-        Vector3[] vertices = meshFilter.mesh.vertices;
+        // Vector3[] vertices = meshFilter.mesh.vertices;
 
-        for (int i = 0; i < vertices.Length; i++)
-        {
-            heightMap[i] = GetWaterHeight(vertices[i]);
-            vertices[i].y = heightMap[i];
-        }
+        // for (int i = 0; i < vertices.Length; i++)
+        // {
+        //     heightMap[i] = GetWaterHeight(vertices[i]);
+        //     vertices[i].y = heightMap[i];
+        // }
 
-        for (int i = 0; i < triangleNeighbors.Length; i++)
-        {
-            triangleNeighbors[i].SetVertex1Height(GetWaterHeight(triangleNeighbors[i].Vertex1));
-            triangleNeighbors[i].SetVertex2Height(GetWaterHeight(triangleNeighbors[i].Vertex2));
-            triangleNeighbors[i].SetVertex3Height(GetWaterHeight(triangleNeighbors[i].Vertex3));
-        }
+        // for (int i = 0; i < triangleNeighbors.Length; i++)
+        // {
+        //     triangleNeighbors[i].SetVertex1Height(GetWaterHeight(triangleNeighbors[i].Vertex1));
+        //     triangleNeighbors[i].SetVertex2Height(GetWaterHeight(triangleNeighbors[i].Vertex2));
+        //     triangleNeighbors[i].SetVertex3Height(GetWaterHeight(triangleNeighbors[i].Vertex3));
+        // }
 
-        meshFilter.mesh.vertices = vertices;
+        // meshFilter.mesh.vertices = vertices;
     }
 
     private void MeshDataPrecomputation()
