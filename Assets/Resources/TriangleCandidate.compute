@@ -1,0 +1,70 @@
+// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel FindTriangleCandidate
+
+// Create a RenderTexture with enableRandomWrite flag and set it
+// with cs.SetTexture
+
+//Cells ===============
+RWStructuredBuffer<float3> cellPositions;
+RWStructuredBuffer<float3> cellSizes;
+uint nbCells;
+
+RWBuffer<int> combinedBuffer; // Size: nb of cells * (nb of triangles in water + 1). 
+                        //The first index in the nb of triangle that intersects and the subsequent indices are the indices of the other triangles (those that intersects)
+
+//Water mesh ==========
+RWStructuredBuffer<float3> vertices;
+RWBuffer<int> triangles;
+uint nbTriangles;
+
+bool Intersects(float3 position1, float3 size1, float3 position2, float3 size2) 
+{
+    bool returnBool = false;
+    if( (position1.x + size1.x/2. >= position2.x - size2.x/2.) && (position2.x + size2.x/2. >= position1.x - size1.x/2.) && 
+        (position1.y + size1.y/2. >= position2.y - size2.y/2.) && (position2.y + size2.y/2. >= position1.y - size1.y/2.) &&
+        (position1.z + size1.z/2. >= position2.z - size2.z/2.) && (position2.z + size2.z/2. >= position1.z - size1.z/2.)
+      )  { returnBool = true; }
+                    
+    return returnBool;
+}
+
+
+[numthreads(64,1,1)]
+void FindTriangleCandidate (uint id : SV_DispatchThreadID)
+{
+    if (id >= nbCells) { return; }
+    
+    combinedBuffer[id * (nbTriangles + 1)] = 0;
+
+    for (uint j = 0; j < nbTriangles; j++)  
+    {
+        //Compute triangle bounds (and apply tranformation)
+        int triangleAIndex = triangles[j * 3];
+        int triangleBIndex = triangles[j * 3 + 1];
+        int triangleCIndex = triangles[j * 3 + 2];
+
+        float3 av3 = vertices[triangleAIndex];
+        float3 bv3 = vertices[triangleBIndex];
+        float3 cv3 = vertices[triangleCIndex];
+
+        float3 mins = { min(min(av3.x, bv3.x), cv3.x),
+                        min(min(av3.y, bv3.y), cv3.y),
+                        min(min(av3.z, bv3.z), cv3.z) };
+        float3 maxes = {max(max(av3.x, bv3.x), cv3.x),
+                        max(max(av3.y, bv3.y), cv3.y),
+                        max(max(av3.z, bv3.z), cv3.z) };
+
+        
+        float3 trianglePosition = (maxes + mins) / 2 ;
+        float3 triangleSize = maxes - mins;
+
+        //Check if it intersects
+        if (Intersects(cellPositions[id], cellSizes[id], trianglePosition, triangleSize))
+        {
+            int arrayPosition = combinedBuffer[id * (nbTriangles + 1)];
+            combinedBuffer[id * (nbTriangles + 1) + arrayPosition + 1] = j;
+            combinedBuffer[id * (nbTriangles + 1)] += 1;
+        }
+
+    }
+}

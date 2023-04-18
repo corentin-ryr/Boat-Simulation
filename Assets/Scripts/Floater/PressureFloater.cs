@@ -36,7 +36,7 @@ public class PressureFloater : MonoBehaviour
 
     //Editor variables ================================
     [Header("References")]
-    public ComputeShader triangleCandidateShader;
+    ComputeShader triangleCandidateShader;
 
     [SerializeField]
     private Mesh floatingMesh;
@@ -54,6 +54,7 @@ public class PressureFloater : MonoBehaviour
     public bool showDragForces;
     public bool showUnderwaterMesh;
     public bool showBouyancyForce;
+    public bool showVerticesUnderwater;
 
     #endregion
 
@@ -61,14 +62,17 @@ public class PressureFloater : MonoBehaviour
     void Start()
     {
         water = GameObject.FindObjectOfType<WaterManager>();
+        triangleCandidateShader = StaticResourcesLoader.TriangleCandidateShader;
         triangleCandidateShader = Instantiate(triangleCandidateShader);
 
         boatRigidbody = GetComponent<Rigidbody>();
         boatRigidbody.centerOfMass = centerOfMass;
 
+        MeshCollider meshCollider = GetComponent<MeshCollider>();
+        meshCollider.convex = true;
+
         if (useColliderAsMesh)
         {
-            MeshCollider meshCollider = GetComponent<MeshCollider>();
             floatingMesh = meshCollider.sharedMesh;
         }
 
@@ -189,7 +193,7 @@ public class PressureFloater : MonoBehaviour
         {
             for (int x = 0; x <= waterGridWidth; x++, i++)
             {
-                waterVertices[i] = new Vector3(x / (float)waterGridWidth * boatMaxSize - boatMaxSize / 2, 0, y / (float)waterGridWidth * boatMaxSize - boatMaxSize / 2) + transform.position; //World coordinates
+                waterVertices[i] = transform.TransformPoint(new Vector3(x / (float)waterGridWidth * boatMaxSize - boatMaxSize / 2, 0, y / (float)waterGridWidth * boatMaxSize - boatMaxSize / 2)); //World coordinates
                 waterVertices[i] = transform.InverseTransformPoint(new Vector3(waterVertices[i].x, water.GetWaterHeight(waterVertices[i]), waterVertices[i].z));
             }
         }
@@ -440,14 +444,16 @@ public class PressureFloater : MonoBehaviour
             else if (intersectionPointsCounterWater == 2)
             {
                 List<Vertex> underwaterVertices = vertices.Where(item => item.depth <= 0).ToList();
-
-                foreach (Vector3? vertex in intersectionsWater.Where(s => s is not null))
+                if (underwaterVertices.Count > 0)
                 {
-                    polygon.Add(new Vertex((Vector3)vertex, 0));
+                    foreach (Vector3? vertex in intersectionsWater.Where(s => s is not null))
+                    {
+                        polygon.Add(new Vertex((Vector3)vertex, 0));
+                    }
+                    Vertex averageVertex = underwaterVertices.Aggregate((v1, v2) => new Vertex(v1.position + v2.position, 0));
+                    averageVertex.position = averageVertex.position / underwaterVertices.Count();
+                    polygon.Add(averageVertex);
                 }
-                Vertex averageVertex = underwaterVertices.Count >= 2 ? underwaterVertices.Aggregate((v1, v2) => new Vertex(v1.position + v2.position, 0)) : underwaterVertices[0];
-                averageVertex.position = averageVertex.position / underwaterVertices.Count();
-                polygon.Add(averageVertex);
 
             }
             // Case 3: one of the intersection point is on an edge of the boat triangle and the other one is inside the boat triangle
@@ -465,11 +471,14 @@ public class PressureFloater : MonoBehaviour
                 }
 
                 List<Vertex> underwaterVertices = vertices.Where(item => item.depth <= 0).ToList();
-                Vertex averageVertex = underwaterVertices.Aggregate((v1, v2) => new Vertex(v1.position + v2.position, 0));
-                averageVertex.position = averageVertex.position / underwaterVertices.Count();
-                if (averageVertex.position != polygon[polygon.Count - 1].position) polygon.Add(averageVertex);
+                if (underwaterVertices.Count > 0)
+                {
+                    Vertex averageVertex = underwaterVertices.Aggregate((v1, v2) => new Vertex(v1.position + v2.position, 0));
+                    averageVertex.position = averageVertex.position / underwaterVertices.Count();
+                    if (averageVertex.position != polygon[polygon.Count - 1].position) polygon.Add(averageVertex);
 
-                polygon.Add(new Vertex((Vector3)intersectionsWater.Where(s => s is not null).ToList()[0], 0));
+                    polygon.Add(new Vertex((Vector3)intersectionsWater.Where(s => s is not null).ToList()[0], 0));
+                }
             }
 
             // Triangulate the polygon (one or two triangles depending on the shape)
@@ -523,12 +532,14 @@ public class PressureFloater : MonoBehaviour
 
     public void OnDrawGizmos()
     {
-        if (!Application.isPlaying) return;
+        if (!Application.isPlaying || !showVerticesUnderwater) return;
 
         foreach (Vertex vertex in boatVertices)
         {
             Gizmos.color = vertex.depth > 0 ? Color.red : Color.blue;
-            // Gizmos.DrawSphere(transform.TransformPoint(vertex.position), 0.05f);
+            Gizmos.DrawSphere(transform.TransformPoint(vertex.position), 0.05f);
+
+
         }
     }
 }

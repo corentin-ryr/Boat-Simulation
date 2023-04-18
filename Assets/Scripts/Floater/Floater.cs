@@ -49,7 +49,7 @@ public class Floater : MonoBehaviour
 
     //Editor variables ================================
     [Header("References")]
-    public ComputeShader triangleCandidateShader;
+    ComputeShader triangleCandidateShader;
 
     [SerializeField]
     private Mesh floatingMesh;
@@ -95,6 +95,7 @@ public class Floater : MonoBehaviour
     void Start()
     {
         water = GameObject.FindObjectOfType<WaterManager>();
+        triangleCandidateShader = StaticResourcesLoader.TriangleCandidateShader;
         triangleCandidateShader = Instantiate(triangleCandidateShader);
 
         boatRigidbody = GetComponent<Rigidbody>();

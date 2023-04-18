@@ -1,8 +1,4 @@
-using System.Collections;
-using System.Collections.Generic;
 using UnityEngine;
-
-
 
 [ExecuteInEditMode]
 [RequireComponent(typeof(MeshFilter), typeof(MeshRenderer))]
@@ -57,7 +53,7 @@ public class WaterGerstner : MonoBehaviour, IWater
 
     public float GetWaterHeight(Vector3 position)
     {
-        return GetWaveDisplacement(position, 0.1f, 1.5f, 0.5f, new float[] {0f, 1f, 0.6f, 0.3f}).y;
+        return GetWaveDisplacement(position, 0.1f, 1.5f, 0.5f, new float[] {0f, 1f, 0.6f, 0.3f}).y ;
     }
 
 }
