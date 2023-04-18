@@ -3,8 +3,7 @@
 This is a simulation of the buoyancy on mesh objects. This method is applicable to any mesh to simulate a floating behaviour. This method works for a moving water surface.
 
 
-
-https://user-images.githubusercontent.com/21026578/232888931-8787eafe-73a2-44a0-8068-38af04c5cd28.mp4
+https://user-images.githubusercontent.com/21026578/232889953-69d9c95f-19a6-47b4-996e-9a279ac0ba2f.mp4
 
 
 # The method
