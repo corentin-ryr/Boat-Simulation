@@ -6,19 +6,19 @@ using UnityEngine;
 
 public class Triangle
 {
-    public Triangle(int triangleIndex, Vector3 v1, Vector3 v2, Vector3 v3) //Vector3 vertex1, Vector3 vertex2, Vector3 vertex3, 
+    public Triangle(int triangleIndex, Vertex v1, Vertex v2, Vertex v3) //Vector3 vertex1, Vector3 vertex2, Vector3 vertex3, 
     {
         this.TriangleIndex = triangleIndex;
-        this.Vertex1 = v1;
-        this.Vertex2 = v2;
-        this.Vertex3 = v3;
+        this.vertex1 = v1;
+        this.vertex2 = v2;
+        this.vertex3 = v3;
     }
-    public Triangle(int triangleIndex, Vector3 v1, Vector3 v2, Vector3 v3, int n1, int n2, int n3) //Vector3 vertex1, Vector3 vertex2, Vector3 vertex3, 
+    public Triangle(int triangleIndex, Vertex v1, Vertex v2, Vertex v3, int n1, int n2, int n3) //Vector3 vertex1, Vector3 vertex2, Vector3 vertex3, 
     {
         this.TriangleIndex = triangleIndex;
-        this.Vertex1 = v1;
-        this.Vertex2 = v2;
-        this.Vertex3 = v3;
+        this.vertex1 = v1;
+        this.vertex2 = v2;
+        this.vertex3 = v3;
 
         this.N1 = n1;
         this.N2 = n2;
@@ -35,19 +35,23 @@ public class Triangle
     public int N3 { get => n3; set => n3 = value; }
 
     //The 3 vertices of the triangle
-    private Vector3 vertex1;
-    private Vector3 vertex2;
-    private Vector3 vertex3;
+    private Vertex vertex1;
+    private Vertex vertex2;
+    private Vertex vertex3;
 
-    public Vector3 Vertex1 { get => vertex1; set => vertex1 = value; }
-    public Vector3 Vertex2 { get => vertex2; set => vertex2 = value; }
-    public Vector3 Vertex3 { get => vertex3; set => vertex3 = value; }
-    public void SetVertex1Height(float height) { this.vertex1.y = height; }
-    public void SetVertex2Height(float height) { this.vertex2.y = height; }
-    public void SetVertex3Height(float height) { this.vertex3.y = height; }
-    public Vector3[] GetVertices()
+    public Vector3 Vertex1Pos { get => vertex1.position; set { vertex1.position = value; } }
+    public Vector3 Vertex2Pos { get => vertex2.position; set { vertex2.position = value; } }
+    public Vector3 Vertex3Pos { get => vertex3.position; set { vertex3.position = value; } }
+    public void SetVertex1Height(float height) { vertex1.position = new Vector3(vertex1.position.x, height, vertex1.position.z); }
+    public void SetVertex2Height(float height) { vertex2.position = new Vector3(vertex2.position.x, height, vertex2.position.z); }
+    public void SetVertex3Height(float height) { vertex3.position = new Vector3(vertex3.position.x, height, vertex3.position.z); }
+    public Vector3[] GetVerticesPosition()
     {
-        return new Vector3[] { Vertex1, Vertex2, Vertex3 };
+        return new Vector3[] { Vertex1Pos, Vertex2Pos, Vertex3Pos };
+    }
+    public Vertex[] GetVertices()
+    {
+        return new Vertex[] { vertex1, vertex2, vertex3 };
     }
 
 
@@ -63,9 +67,32 @@ public class Triangle
 
     public override string ToString()
     {
-        return "Triangle: " + this.N1 + ", "  + this.N2 + ", "  + this.N3;
+        return "Triangle: " + this.N1 + ", " + this.N2 + ", " + this.N3;
     }
 
+    public Vector3 GetNormal()
+    {
+        return Vector3.Cross(Vertex1Pos - Vertex2Pos, Vertex1Pos - Vertex3Pos);
+    }
+
+}
+
+public class Vertex
+{
+
+    public Vertex(Vector3 _position, float _depth)
+    {
+        position = _position;
+        depth = _depth;
+    }
+
+    public Vector3 position { get; set; }
+    public float depth { get; set; }
+
+    public override string ToString()
+    {
+        return $"(Position: {position}, Depth: {depth})";
+    }
 }
 
 public struct Cell
@@ -84,7 +111,7 @@ public struct Cell
     }
 
     public Bounds Bounds { get; }
-    private List<Triangle> triangleSet1;
+    private List<Triangle> triangleSet1; // Boat triangles
     public Triangle[] TriangleSet1 { get => triangleSet1.ToArray(); }
     private bool hasCandidatePotential;
     public bool HasCandidatePotential { get => hasCandidatePotential; }
@@ -94,7 +121,7 @@ public struct Cell
         triangleSet1.Add(triangle);
         hasCandidatePotential = true;
     }
-    private List<Triangle> triangleSet2;
+    private List<Triangle> triangleSet2; // Water triangles
     public Triangle[] TriangleSet2 { get => triangleSet2.ToArray(); }
 
     public void AddSet2(Triangle triangle)
@@ -150,18 +177,24 @@ public struct MovingAverage
 public static class MeshHelper
 {
 
-    public static Triangle[] FindTriangleNeighbors(Mesh mesh)
+    public static (Triangle[], Vertex[]) FindTriangleNeighbors(Mesh mesh)
     {
         int Nt = mesh.triangles.Length / 3;
         int Nv = mesh.vertexCount;
+
+        List<Vertex> vertices = new List<Vertex>();
+        foreach (Vector3 vertex in mesh.vertices)
+        {
+            vertices.Add(new Vertex(vertex, 0));
+        }
 
         List<Triangle>[] S = new List<Triangle>[Nv];
         Triangle[] triangleNeighbors = new Triangle[Nt];
         for (int i = 0; i < Nt; i++)
         {
-            Triangle triangle = new Triangle(i, mesh.vertices[mesh.triangles[i * 3]],
-                                                mesh.vertices[mesh.triangles[i * 3 + 1]],
-                                                mesh.vertices[mesh.triangles[i * 3 + 2]],
+            Triangle triangle = new Triangle(i, vertices[mesh.triangles[i * 3]],
+                                                vertices[mesh.triangles[i * 3 + 1]],
+                                                vertices[mesh.triangles[i * 3 + 2]],
                                                 i * 3, i * 3 + 1, i * 3 + 2);
             triangleNeighbors[i] = triangle;
             (S[mesh.triangles[i * 3]] ??= new List<Triangle>()).Add(triangle);
@@ -180,10 +213,10 @@ public static class MeshHelper
             triangleNeighbors[i].T3 = t3.Any(p => p.TriangleIndex != i) ? t3.First<Triangle>(p => p.TriangleIndex != i) : null;
         }
 
-        return triangleNeighbors;
+        return (triangleNeighbors, vertices.ToArray());
     }
 
-    public static Triangle[] FindTriangleNeighbors(Vector3[] vertices, int[] triangles)
+    public static (Triangle[], Vertex[]) FindTriangleNeighbors(Vector3[] vertices, int[] triangles)
     {
         Mesh mesh = new Mesh();
         mesh.vertices = vertices;
@@ -250,18 +283,21 @@ public static class MeshHelper
         return (barycentre, volume);
     }
 
-    public static (Vector3, float, Vector3, Vector3) ComputeVolumeAndBarycentre(Triangle[] triangles, Vector3 linearSpeed, Vector3 angularSpeed, float C = 1f, float rho = 1000, float mu = 1E-3f)
+    public static (Vector3, float, List<Vector3>, List<Vector3>) ComputeVolumeAndBarycentre(Triangle[] triangles, Vector3 linearSpeed, Vector3 angularSpeed, float C = 1f, float rho = 1000, float mu = 1E-3f)
     {
         float volume = 0f;
         Vector3 barycentre = Vector3.zero;
-        Vector3 linearDrag = Vector3.zero;
-        Vector3 angularDrag = Vector3.zero;
+        // Vector3 linearDrag = Vector3.zero;
+        // Vector3 angularDrag = Vector3.zero;
+
+        List<Vector3> forcePositions = new List<Vector3>();
+        List<Vector3> forceDirections = new List<Vector3>();
 
         for (int i = 0; i < triangles.Length; i++)
         {
-            Vector3 vertex1 = triangles[i].Vertex1;
-            Vector3 vertex2 = triangles[i].Vertex2;
-            Vector3 vertex3 = triangles[i].Vertex3;
+            Vector3 vertex1 = triangles[i].Vertex1Pos;
+            Vector3 vertex2 = triangles[i].Vertex2Pos;
+            Vector3 vertex3 = triangles[i].Vertex3Pos;
             Vector3 trianglePosition = (vertex1 + vertex2 + vertex3) / 3f;
 
             Vector3 normal = Vector3.Cross(vertex1 - vertex2, vertex1 - vertex3);
@@ -272,25 +308,29 @@ public static class MeshHelper
             volume += tetraVolume;
             barycentre += tetraCentroid;
 
-            Vector3 speedAtTriangle = Vector3.Cross(angularSpeed, trianglePosition);//  / (trianglePosition.magnitude * trianglePosition.magnitude);
+            Vector3 speedAtTriangle = Vector3.Cross(angularSpeed, trianglePosition) + linearSpeed;//  / (trianglePosition.magnitude * trianglePosition.magnitude);
 
             //Friction torque
             float projectedSurfaceAngularSpeed = Vector3.Dot(normal, angularSpeed) > 0 ? ProjectedSurface(vertex1, vertex2, vertex3, speedAtTriangle) : 0;
-            angularDrag -= rho * 0.5f * speedAtTriangle.magnitude * speedAtTriangle.magnitude *
-                            projectedSurfaceAngularSpeed * trianglePosition.magnitude * angularSpeed.normalized * C;
+            Vector3 frictionForce = -rho * 0.5f * speedAtTriangle.magnitude * speedAtTriangle.normalized * projectedSurfaceAngularSpeed * C;
+            // angularDrag -= frictionForce * trianglePosition.magnitude;
 
             //Shear stress
             float projectedSurfaceShearStress = ProjectedSurface(vertex1, vertex2, vertex3, trianglePosition);
-            angularDrag -= projectedSurfaceShearStress * mu * angularSpeed * trianglePosition.magnitude;
+            Vector3 shearForce = -projectedSurfaceShearStress * mu * angularSpeed;
+            // angularDrag += shearForce * trianglePosition.magnitude;
 
             //Linear friction drag
             float projectedSurfaceLinearSpeed = Vector3.Dot(normal, linearSpeed) > 0 ? ProjectedSurface(vertex1, vertex2, vertex3, linearSpeed) : 0;
-            linearDrag -= rho * 0.5f * linearSpeed.magnitude * linearSpeed * projectedSurfaceLinearSpeed * C;
+            // linearDrag += -rho * 0.5f * linearSpeed.magnitude * linearSpeed * projectedSurfaceLinearSpeed * C + shearForce + frictionForce;
+
+            forcePositions.Add(trianglePosition);
+            forceDirections.Add(-rho * 0.5f * linearSpeed.magnitude * linearSpeed * projectedSurfaceLinearSpeed * C + shearForce + frictionForce);
 
         }
 
         if (volume > 0f) barycentre /= volume;
-        return (barycentre, volume, linearDrag, angularDrag);
+        return (barycentre, volume, forcePositions, forceDirections);
     }
 
     public static Mesh WeldVertices(Mesh aMesh)

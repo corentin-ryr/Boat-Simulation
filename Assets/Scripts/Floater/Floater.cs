@@ -185,11 +185,11 @@ public class Floater : MonoBehaviour
         {
             if (Vector3.Dot(Vector3.Cross(averageWaterPosition - chain[i], averageWaterPosition - chain[i + 1]), waterIntersectionNormal) > 0)
             {
-                seaTriangulated.Add(new Triangle(0, averageWaterPosition, chain[i], chain[i + 1]));
+                seaTriangulated.Add(new Triangle(0, new Vertex(averageWaterPosition, 0), new Vertex(chain[i], 0), new Vertex(chain[i + 1], 0)));
             }
             else
             {
-                seaTriangulated.Add(new Triangle(0, averageWaterPosition, chain[i + 1], chain[i]));
+                seaTriangulated.Add(new Triangle(0, new Vertex(averageWaterPosition, 0), new Vertex(chain[i + 1], 0), new Vertex(chain[i], 0)));
             }
         }
 
@@ -211,14 +211,14 @@ public class Floater : MonoBehaviour
         (barycentre, fullVolume) = MeshHelper.ComputeVolumeAndBarycentre(floatingMesh.vertices, floatingMesh.triangles, transform);
 
         //Precomputing the triangle neighbor relations and the background grid (only once at the beginning because we suppose that the mesh does not change)
-        boatTriangleNeighbors = MeshHelper.FindTriangleNeighbors(floatingMesh);
+        (boatTriangleNeighbors, _) = MeshHelper.FindTriangleNeighbors(floatingMesh);
 
         gridCells = MeshHelper.ComputeBackgroundGrid(floatingMesh.bounds, cellMaxSize, floatingMesh.triangles.Length);
 
         AssignTrianglesToBoundingBox();
 
         CreateWaterGrid();
-        waterTriangleNeighbors = MeshHelper.FindTriangleNeighbors(waterVertices, waterTriangles);
+        (waterTriangleNeighbors, _) = MeshHelper.FindTriangleNeighbors(waterVertices, waterTriangles);
 
         //Prepare the compute shader =======================================
         kernelTriangleCandidate = triangleCandidateShader.FindKernel("FindTriangleCandidate");
@@ -385,9 +385,9 @@ public class Floater : MonoBehaviour
 
         for (int i = 0; i < waterTriangleNeighbors.Length; i++)
         {
-            waterTriangleNeighbors[i].Vertex1 = waterVertices[waterTriangles[waterTriangleNeighbors[i].N1]];
-            waterTriangleNeighbors[i].Vertex2 = waterVertices[waterTriangles[waterTriangleNeighbors[i].N2]];
-            waterTriangleNeighbors[i].Vertex3 = waterVertices[waterTriangles[waterTriangleNeighbors[i].N3]];
+            waterTriangleNeighbors[i].Vertex1Pos = waterVertices[waterTriangles[waterTriangleNeighbors[i].N1]];
+            waterTriangleNeighbors[i].Vertex2Pos = waterVertices[waterTriangles[waterTriangleNeighbors[i].N2]];
+            waterTriangleNeighbors[i].Vertex3Pos = waterVertices[waterTriangles[waterTriangleNeighbors[i].N3]];
         }
     }
 
@@ -477,9 +477,9 @@ public class Floater : MonoBehaviour
         if (bottomHalf is not null && trianglesSea is not null && intermediate is not null)
         {
 
-            (Vector3 barycentreBoat, float volumeBoat, Vector3 linearDragBoat, Vector3 angularDragBoat) = MeshHelper.ComputeVolumeAndBarycentre(bottomHalf, localVelocity, localAngularVelocity, C);
-            (Vector3 barycentreSea, float volumeSea, Vector3 linearDragSea, Vector3 angularDragSea) = MeshHelper.ComputeVolumeAndBarycentre(trianglesSea, localVelocity, localAngularVelocity, C, 1.2f, 1E-5f);
-            (Vector3 barycentreIntermediate, float volumeIntermediate, Vector3 linearDragIntermediate, Vector3 angularDragIntermediate) = MeshHelper.ComputeVolumeAndBarycentre(intermediate, localVelocity, localAngularVelocity, C, 1.2f, 1E-5f);
+            (Vector3 barycentreBoat, float volumeBoat, List<Vector3> forcePositionsBoat, List<Vector3> forceDirectionsBoat) = MeshHelper.ComputeVolumeAndBarycentre(bottomHalf, localVelocity, localAngularVelocity, C);
+            (Vector3 barycentreSea, float volumeSea, List<Vector3> forcePositionsSea, List<Vector3> forceDirectionsSea) = MeshHelper.ComputeVolumeAndBarycentre(trianglesSea, localVelocity, localAngularVelocity, C, 1.2f, 1E-5f);
+            (Vector3 barycentreIntermediate, float volumeIntermediate, List<Vector3> forcePositionsIntermediate, List<Vector3> forceDirectionsIntermediate) = MeshHelper.ComputeVolumeAndBarycentre(intermediate, localVelocity, localAngularVelocity, C, 1.2f, 1E-5f);
 
             immersedVolume = volumeSea + volumeBoat + volumeIntermediate;
             newBarycentre = (barycentreBoat * volumeBoat + barycentreSea * volumeSea + barycentreIntermediate * volumeIntermediate) / immersedVolume;
@@ -495,11 +495,11 @@ public class Floater : MonoBehaviour
             forceOrigin.Add(transform.position);
 
             forceDirection.Add(buoyancyForce);
-            forceDirection.Add(transform.TransformDirection(linearDragBoat + linearDragSea + linearDragIntermediate));
+            // forceDirection.Add(transform.TransformDirection(linearDragBoat + linearDragSea + linearDragIntermediate));
         }
         else
         {
-            (Vector3 barycentreBoat, float volumeBoat, Vector3 linearDragBoat, Vector3 angularDragBoat) = MeshHelper.ComputeVolumeAndBarycentre(boatTriangleNeighbors, localVelocity, localAngularVelocity, C);
+            (Vector3 barycentreBoat, float volumeBoat, List<Vector3> forcePositionsBoat, List<Vector3> forceDirectionsBoat) = MeshHelper.ComputeVolumeAndBarycentre(boatTriangleNeighbors, localVelocity, localAngularVelocity, C);
 
             Vector3 buoyancyForce = smoothBuoyancy.Smooth(volumeBoat * 1000 * 9.81f * Vector3.up);
             Vector3 barycentre = smoothBarycentre.Smooth(transform.TransformPoint(barycentreBoat));
@@ -512,7 +512,7 @@ public class Floater : MonoBehaviour
             forceOrigin.Add(transform.position);
 
             forceDirection.Add(buoyancyForce);
-            forceDirection.Add(transform.TransformDirection(linearDragBoat));
+            // forceDirection.Add(transform.TransformDirection(linearDragBoat));
         }
 
 
@@ -546,9 +546,9 @@ public class Floater : MonoBehaviour
 
     private bool TriangleUnderWater(Triangle triangle)
     {
-        if (Vector3.Dot(triangle.Vertex1 - averageWaterPosition, waterIntersectionNormal) > 0) return false;
-        if (Vector3.Dot(triangle.Vertex2 - averageWaterPosition, waterIntersectionNormal) > 0) return false;
-        if (Vector3.Dot(triangle.Vertex3 - averageWaterPosition, waterIntersectionNormal) > 0) return false;
+        if (Vector3.Dot(triangle.Vertex1Pos - averageWaterPosition, waterIntersectionNormal) > 0) return false;
+        if (Vector3.Dot(triangle.Vertex2Pos - averageWaterPosition, waterIntersectionNormal) > 0) return false;
+        if (Vector3.Dot(triangle.Vertex3Pos - averageWaterPosition, waterIntersectionNormal) > 0) return false;
 
         return true;
     }
@@ -626,23 +626,27 @@ public class Floater : MonoBehaviour
     #endregion
 }
 
-public class RealTimeVector3DSmoother {
+public class RealTimeVector3DSmoother
+{
     private readonly Vector3[] window;
     private int currentIndex;
     private readonly int windowSize;
 
-    public RealTimeVector3DSmoother(int windowSize) {
+    public RealTimeVector3DSmoother(int windowSize)
+    {
         window = new Vector3[windowSize];
         currentIndex = 0;
         this.windowSize = windowSize;
     }
 
-    public Vector3 Smooth(Vector3 inputVector) {
+    public Vector3 Smooth(Vector3 inputVector)
+    {
         window[currentIndex] = inputVector;
         currentIndex = (currentIndex + 1) % windowSize;
 
         Vector3 sum = Vector3.zero;
-        for (int i = 0; i < windowSize; i++) {
+        for (int i = 0; i < windowSize; i++)
+        {
             sum += window[i];
         }
 

@@ -69,6 +69,10 @@ Material:
         m_Texture: {fileID: 0}
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
+    - _PlanarReflectionTexture:
+        m_Texture: {fileID: 8400000, guid: 4ae8ae7350b67b44785d874c413a2e03, type: 2}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
     - _SpecGlossMap:
         m_Texture: {fileID: 0}
         m_Scale: {x: 1, y: 1}
@@ -126,6 +130,8 @@ Material:
     - _QueueControl: 1
     - _QueueOffset: 0
     - _ReceiveShadows: 1
+    - _Reflection_fresnel_power: 0.3
+    - _Reflection_strength: 0.1
     - _Refraction_scale: 0.01
     - _Refraction_speed: 0.05
     - _Refraction_strength: 0.005
@@ -149,6 +155,7 @@ Material:
     - _Deep_water_color: {r: 0.038892854, g: 0.17089956, b: 0.3584906, a: 0.9411765}
     - _EmissionColor: {r: 0, g: 0, b: 0, a: 1}
     - _Foam_color: {r: 0.26415092, g: 0.26415092, b: 0.26415092, a: 1}
+    - _Fog_color: {r: 0.75686276, g: 0.7176471, b: 0.6666667, a: 0}
     - _Horizon_color: {r: 0.8018868, g: 0.70237833, b: 0.15508187, a: 0.23921569}
     - _Intersection_foam_color: {r: 0.2735849, g: 0.2722944, b: 0.2722944, a: 0}
     - _Shallow_water_color: {r: 0.5767177, g: 0.88988894, b: 0.9056604, a: 1}

@@ -9,12 +9,12 @@ public static class FloaterHelper
     //TODO compute cases 3 and 4
     public static (int, Triangle[], bool, Triangle) IdentifyCase(Triangle triangle1, Triangle triangle2, ref Vector3 P, bool swaped, Transform debugTransform = null)
     {
-        Vector3 a = triangle1.Vertex1;
-        Vector3 b = triangle1.Vertex2;
-        Vector3 c = triangle1.Vertex3;
-        Vector3 d = triangle2.Vertex1;
-        Vector3 e = triangle2.Vertex2;
-        Vector3 f = triangle2.Vertex3;
+        Vector3 a = triangle1.Vertex1Pos;
+        Vector3 b = triangle1.Vertex2Pos;
+        Vector3 c = triangle1.Vertex3Pos;
+        Vector3 d = triangle2.Vertex1Pos;
+        Vector3 e = triangle2.Vertex2Pos;
+        Vector3 f = triangle2.Vertex3Pos;
 
         //Case 1 if p is inside of triangle1 
         Triangle[] triangleIndicesToCheck1 = null;
@@ -136,7 +136,7 @@ public static class FloaterHelper
 
                 triangleVisited.Add(neighbor);
 
-                if (neighbor.Vertex1 == commonPoint || neighbor.Vertex2 == commonPoint || neighbor.Vertex3 == commonPoint)
+                if (neighbor.Vertex1Pos == commonPoint || neighbor.Vertex2Pos == commonPoint || neighbor.Vertex3Pos == commonPoint)
                 {
                     touchingTriangles.Add(neighbor);
                     Q.Enqueue(neighbor);
@@ -224,20 +224,20 @@ public static class FloaterHelper
                     // Compute the lower ring
                     if (vectorClosestToStart is not null)
                     {
-                        Vector3 waterNormal = Vector3.Cross(waterTriangle.Vertex1 - waterTriangle.Vertex2, waterTriangle.Vertex1 - waterTriangle.Vertex3).normalized;
-                        Vector3 floatingNormal = Vector3.Cross(floatingTriangle.Vertex1 - floatingTriangle.Vertex2, floatingTriangle.Vertex1 - floatingTriangle.Vertex3).normalized;
+                        Vector3 waterNormal = Vector3.Cross(waterTriangle.Vertex1Pos - waterTriangle.Vertex2Pos, waterTriangle.Vertex1Pos - waterTriangle.Vertex3Pos).normalized;
+                        Vector3 floatingNormal = Vector3.Cross(floatingTriangle.Vertex1Pos - floatingTriangle.Vertex2Pos, floatingTriangle.Vertex1Pos - floatingTriangle.Vertex3Pos).normalized;
 
                         List<Vector3> underwaterPoints = new List<Vector3>();
 
-                        if (Vector3.Dot(floatingTriangle.Vertex1 - chain[chain.Count - 1], waterNormal) < 0) underwaterPoints.Add(floatingTriangle.Vertex1);
-                        if (Vector3.Dot(floatingTriangle.Vertex2 - chain[chain.Count - 1], waterNormal) < 0) underwaterPoints.Add(floatingTriangle.Vertex2);
-                        if (Vector3.Dot(floatingTriangle.Vertex3 - chain[chain.Count - 1], waterNormal) < 0) underwaterPoints.Add(floatingTriangle.Vertex3);
+                        if (Vector3.Dot(floatingTriangle.Vertex1Pos - chain[chain.Count - 1], waterNormal) < 0) underwaterPoints.Add(floatingTriangle.Vertex1Pos);
+                        if (Vector3.Dot(floatingTriangle.Vertex2Pos - chain[chain.Count - 1], waterNormal) < 0) underwaterPoints.Add(floatingTriangle.Vertex2Pos);
+                        if (Vector3.Dot(floatingTriangle.Vertex3Pos - chain[chain.Count - 1], waterNormal) < 0) underwaterPoints.Add(floatingTriangle.Vertex3Pos);
 
                         if (underwaterPoints.Count == 1)
                         {
                             Vector3 tempNormal = Vector3.Cross(underwaterPoints[0] - chain[chain.Count - 1], underwaterPoints[0] - currentP);
-                            if (Vector3.Dot(floatingNormal, tempNormal) > 0) lowerRing.Add(new Triangle(0, underwaterPoints[0], chain[chain.Count - 1], currentP));
-                            else lowerRing.Add(new Triangle(0, chain[chain.Count - 1], underwaterPoints[0], currentP));
+                            if (Vector3.Dot(floatingNormal, tempNormal) > 0) lowerRing.Add(new Triangle(0, new Vertex(underwaterPoints[0], 0), new Vertex(chain[chain.Count - 1], 0), new Vertex(currentP, 0)));
+                            else lowerRing.Add(new Triangle(0, new Vertex(chain[chain.Count - 1], 0), new Vertex(underwaterPoints[0], 0), new Vertex(currentP, 0)));
 
                         }
                         else if (underwaterPoints.Count == 2)
@@ -246,13 +246,13 @@ public static class FloaterHelper
                             bool rightSens = Vector3.Dot(floatingNormal, Vector3.Cross(underwaterPoints[indexStartingFloatingPoint] - chain[chain.Count - 1],
                                                                                         underwaterPoints[indexStartingFloatingPoint] - currentP)) > 0;
 
-                            if (rightSens) lowerRing.Add(new Triangle(0, underwaterPoints[indexStartingFloatingPoint], chain[chain.Count - 1], currentP));
-                            else lowerRing.Add(new Triangle(0, chain[chain.Count - 1], underwaterPoints[indexStartingFloatingPoint], currentP));
+                            if (rightSens) lowerRing.Add(new Triangle(0, new Vertex(underwaterPoints[indexStartingFloatingPoint], 0), new Vertex(chain[chain.Count - 1], 0), new Vertex(currentP, 0)));
+                            else lowerRing.Add(new Triangle(0, new Vertex(chain[chain.Count - 1], 0), new Vertex(underwaterPoints[indexStartingFloatingPoint], 0), new Vertex(currentP, 0)));
 
                             if (changeFloatingTriangle)
                             {
-                                if (rightSens) lowerRing.Add(new Triangle(0, underwaterPoints[1 - indexStartingFloatingPoint], underwaterPoints[indexStartingFloatingPoint], currentP));
-                                else lowerRing.Add(new Triangle(0, underwaterPoints[indexStartingFloatingPoint], underwaterPoints[1 - indexStartingFloatingPoint], currentP));
+                                if (rightSens) lowerRing.Add(new Triangle(0, new Vertex(underwaterPoints[1 - indexStartingFloatingPoint], 0), new Vertex(underwaterPoints[indexStartingFloatingPoint], 0), new Vertex(currentP, 0)));
+                                else lowerRing.Add(new Triangle(0, new Vertex(underwaterPoints[indexStartingFloatingPoint], 0), new Vertex(underwaterPoints[1 - indexStartingFloatingPoint], 0), new Vertex(currentP, 0)));
                             }
                         }
                         else Debug.Log("All three points underwater");
@@ -284,26 +284,26 @@ public static class FloaterHelper
 
     public static Vector3 PointAdjacentOnEdge(Triangle triangle, Triangle waterTriangle, Vector3 point)
     {
-        float edge1 = Vector3.Cross((triangle.Vertex1 - triangle.Vertex2).normalized, triangle.Vertex1 - point).magnitude;
-        float edge2 = Vector3.Cross((triangle.Vertex2 - triangle.Vertex3).normalized, (triangle.Vertex2 - point).normalized).magnitude;
-        float edge3 = Vector3.Cross((triangle.Vertex3 - triangle.Vertex1).normalized, (triangle.Vertex3 - point).normalized).magnitude;
+        float edge1 = Vector3.Cross((triangle.Vertex1Pos - triangle.Vertex2Pos).normalized, triangle.Vertex1Pos - point).magnitude;
+        float edge2 = Vector3.Cross((triangle.Vertex2Pos - triangle.Vertex3Pos).normalized, (triangle.Vertex2Pos - point).normalized).magnitude;
+        float edge3 = Vector3.Cross((triangle.Vertex3Pos - triangle.Vertex1Pos).normalized, (triangle.Vertex3Pos - point).normalized).magnitude;
         float[] edges = new float[] { edge1, edge2, edge3 };
 
         int edgeIndex = edges.ToList().IndexOf(edges.Min());
 
-        Vector3 waterNormal = Vector3.Cross(waterTriangle.Vertex1 - waterTriangle.Vertex2, waterTriangle.Vertex1 - waterTriangle.Vertex3);
+        Vector3 waterNormal = Vector3.Cross(waterTriangle.Vertex1Pos - waterTriangle.Vertex2Pos, waterTriangle.Vertex1Pos - waterTriangle.Vertex3Pos);
 
         if (edgeIndex == 0)
         {
-            return Vector3.Dot(waterNormal, triangle.Vertex2 - triangle.Vertex1) > 0 ? triangle.Vertex1 : triangle.Vertex2;
+            return Vector3.Dot(waterNormal, triangle.Vertex2Pos - triangle.Vertex1Pos) > 0 ? triangle.Vertex1Pos : triangle.Vertex2Pos;
         }
         if (edgeIndex == 1)
         {
-            return Vector3.Dot(waterNormal, triangle.Vertex3 - triangle.Vertex2) > 0 ? triangle.Vertex2 : triangle.Vertex3;
+            return Vector3.Dot(waterNormal, triangle.Vertex3Pos - triangle.Vertex2Pos) > 0 ? triangle.Vertex2Pos : triangle.Vertex3Pos;
         }
         else
         {
-            return Vector3.Dot(waterNormal, triangle.Vertex1 - triangle.Vertex3) > 0 ? triangle.Vertex3 : triangle.Vertex1;
+            return Vector3.Dot(waterNormal, triangle.Vertex1Pos - triangle.Vertex3Pos) > 0 ? triangle.Vertex3Pos : triangle.Vertex1Pos;
         }
     }
 

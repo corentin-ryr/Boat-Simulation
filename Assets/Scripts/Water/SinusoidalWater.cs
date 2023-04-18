@@ -56,9 +56,9 @@ public class SinusoidalWater : MonoBehaviour, IWater
 
         for (int i = 0; i < triangleNeighbors.Length; i++)
         {
-            triangleNeighbors[i].SetVertex1Height(GetWaterHeight(triangleNeighbors[i].Vertex1));
-            triangleNeighbors[i].SetVertex2Height(GetWaterHeight(triangleNeighbors[i].Vertex2));
-            triangleNeighbors[i].SetVertex3Height(GetWaterHeight(triangleNeighbors[i].Vertex3));
+            triangleNeighbors[i].SetVertex1Height(GetWaterHeight(triangleNeighbors[i].Vertex1Pos));
+            triangleNeighbors[i].SetVertex2Height(GetWaterHeight(triangleNeighbors[i].Vertex2Pos));
+            triangleNeighbors[i].SetVertex3Height(GetWaterHeight(triangleNeighbors[i].Vertex3Pos));
         }
 
         meshFilter.mesh.vertices = vertices;
@@ -67,7 +67,7 @@ public class SinusoidalWater : MonoBehaviour, IWater
 
     private void MeshDataPrecomputation()
     {
-        triangleNeighbors = MeshHelper.FindTriangleNeighbors(meshFilter.mesh);
+        (triangleNeighbors, _) = MeshHelper.FindTriangleNeighbors(meshFilter.mesh);
     }
 
     public float GetWaterHeight(Vector3 position)

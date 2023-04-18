@@ -69,7 +69,7 @@ public class FlatWater : MonoBehaviour, IWater
 
     private void MeshDataPrecomputation()
     {
-        triangleNeighbors = MeshHelper.FindTriangleNeighbors(meshFilter.mesh);
+        (triangleNeighbors, _) = MeshHelper.FindTriangleNeighbors(meshFilter.mesh);
     }
 
     public float GetWaterHeight(Vector3 position)

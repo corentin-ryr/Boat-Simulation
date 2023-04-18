@@ -43,24 +43,26 @@ public static class DebugHelper
         // if (verbose) Debug.Log("Number of candidates: " + triangles.Length);
         for (int i = 0; i < triangles.Length; i++)
         {
-            Vector3 vertex0 = transform.TransformPoint(triangles[i].Vertex1);
-            Vector3 vertex1 = transform.TransformPoint(triangles[i].Vertex2);
-            Vector3 vertex2 = transform.TransformPoint(triangles[i].Vertex3);
+            Vector3 vertex0 = transform.TransformPoint(triangles[i].Vertex1Pos);
+            Vector3 vertex1 = transform.TransformPoint(triangles[i].Vertex2Pos);
+            Vector3 vertex2 = transform.TransformPoint(triangles[i].Vertex3Pos);
 
             Debug.DrawLine(vertex0, vertex1, color);
             Debug.DrawLine(vertex1, vertex2, color);
             Debug.DrawLine(vertex2, vertex0, color);
 
-            // Debug.DrawLine(transform.position, (vertex0 + vertex1 + vertex2) / 3f, Color.black);
+            Vector3 normal = Vector3.Cross(vertex1 - vertex0, vertex2 - vertex0).normalized * 0.1f;
+
+            // Debug.DrawRay((vertex0 + vertex1 + vertex2) / 3f, normal, Color.black);
         }
     }
     public static void ShowMesh(Triangle[] triangles, Color color)
     {
         for (int i = 0; i < triangles.Length; i++)
         {
-            Vector3 a = triangles[i].Vertex1;
-            Vector3 b = triangles[i].Vertex2;
-            Vector3 c = triangles[i].Vertex3;
+            Vector3 a = triangles[i].Vertex1Pos;
+            Vector3 b = triangles[i].Vertex2Pos;
+            Vector3 c = triangles[i].Vertex3Pos;
 
             Debug.DrawLine(a, b, color);
             Debug.DrawLine(b, c, color);
@@ -89,39 +91,39 @@ public static class DrawArrow
     public static void ForGizmo(Vector3 pos, Vector3 direction, float arrowHeadLength = 0.25f, float arrowHeadAngle = 20.0f)
     {
         Gizmos.DrawRay(pos, direction);
-       
-        Vector3 right = Quaternion.LookRotation(direction) * Quaternion.Euler(0,180+arrowHeadAngle,0) * new Vector3(0,0,1);
-        Vector3 left = Quaternion.LookRotation(direction) * Quaternion.Euler(0,180-arrowHeadAngle,0) * new Vector3(0,0,1);
+
+        Vector3 right = Quaternion.LookRotation(direction) * Quaternion.Euler(0, 180 + arrowHeadAngle, 0) * new Vector3(0, 0, 1);
+        Vector3 left = Quaternion.LookRotation(direction) * Quaternion.Euler(0, 180 - arrowHeadAngle, 0) * new Vector3(0, 0, 1);
         Gizmos.DrawRay(pos + direction, right * arrowHeadLength);
         Gizmos.DrawRay(pos + direction, left * arrowHeadLength);
     }
- 
+
     public static void ForGizmo(Vector3 pos, Vector3 direction, Color color, float arrowHeadLength = 0.25f, float arrowHeadAngle = 20.0f)
     {
         Gizmos.color = color;
         Gizmos.DrawRay(pos, direction);
-       
-        Vector3 right = Quaternion.LookRotation(direction) * Quaternion.Euler(0,180+arrowHeadAngle,0) * new Vector3(0,0,1);
-        Vector3 left = Quaternion.LookRotation(direction) * Quaternion.Euler(0,180-arrowHeadAngle,0) * new Vector3(0,0,1);
+
+        Vector3 right = Quaternion.LookRotation(direction) * Quaternion.Euler(0, 180 + arrowHeadAngle, 0) * new Vector3(0, 0, 1);
+        Vector3 left = Quaternion.LookRotation(direction) * Quaternion.Euler(0, 180 - arrowHeadAngle, 0) * new Vector3(0, 0, 1);
         Gizmos.DrawRay(pos + direction, right * arrowHeadLength);
         Gizmos.DrawRay(pos + direction, left * arrowHeadLength);
     }
- 
+
     public static void ForDebug(Vector3 pos, Vector3 direction, float arrowHeadLength = 0.25f, float arrowHeadAngle = 20.0f)
     {
         Debug.DrawRay(pos, direction);
-       
-        Vector3 right = Quaternion.LookRotation(direction) * Quaternion.Euler(0,180+arrowHeadAngle,0) * new Vector3(0,0,1);
-        Vector3 left = Quaternion.LookRotation(direction) * Quaternion.Euler(0,180-arrowHeadAngle,0) * new Vector3(0,0,1);
+
+        Vector3 right = Quaternion.LookRotation(direction) * Quaternion.Euler(0, 180 + arrowHeadAngle, 0) * new Vector3(0, 0, 1);
+        Vector3 left = Quaternion.LookRotation(direction) * Quaternion.Euler(0, 180 - arrowHeadAngle, 0) * new Vector3(0, 0, 1);
         Debug.DrawRay(pos + direction, right * arrowHeadLength);
         Debug.DrawRay(pos + direction, left * arrowHeadLength);
     }
     public static void ForDebug(Vector3 pos, Vector3 direction, Color color, float arrowHeadLength = 0.25f, float arrowHeadAngle = 20.0f)
     {
         Debug.DrawRay(pos, direction, color);
-       
-        Vector3 right = Quaternion.LookRotation(direction) * Quaternion.Euler(0,180+arrowHeadAngle,0) * new Vector3(0,0,1);
-        Vector3 left = Quaternion.LookRotation(direction) * Quaternion.Euler(0,180-arrowHeadAngle,0) * new Vector3(0,0,1);
+
+        Vector3 right = Quaternion.LookRotation(direction) * Quaternion.Euler(0, 180 + arrowHeadAngle, 0) * new Vector3(0, 0, 1);
+        Vector3 left = Quaternion.LookRotation(direction) * Quaternion.Euler(0, 180 - arrowHeadAngle, 0) * new Vector3(0, 0, 1);
         Debug.DrawRay(pos + direction, right * arrowHeadLength, color);
         Debug.DrawRay(pos + direction, left * arrowHeadLength, color);
     }
