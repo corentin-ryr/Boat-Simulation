@@ -2,13 +2,14 @@
 
 This is a simulation of the buoyancy on mesh objects. This method is applicable to any mesh to simulate a floating behaviour. This method works for a moving water surface.
 
-https://user-images.githubusercontent.com/21026578/219183899-161787d3-9dd9-455e-87f2-cf723217462a.mp4
+
+
+https://user-images.githubusercontent.com/21026578/232888931-8787eafe-73a2-44a0-8068-38af04c5cd28.mp4
+
 
 # The method
 
 To simulate the buoyancy, we need to apply two forces, the gravity at the center of mass and the buoyant force at the geometric center of the immersed part of the object and oriented toward the normal of the water surface.
-
-
 
 
 To find the immersed part of the mesh, we compute the intersection between the water mesh and the floating object's mesh. The intersection finding is based on [1], this allows to find an accurate chain of points that are exactly at the intersection.
