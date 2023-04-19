@@ -5,6 +5,23 @@ This is a simulation of the buoyancy on mesh objects. This method is applicable 
 
 https://user-images.githubusercontent.com/21026578/232889953-69d9c95f-19a6-47b4-996e-9a279ac0ba2f.mp4
 
+# Usage
+
+The buoyancy system requires two elements:
+* The water
+* The floating object
+
+## Water
+
+The system needs a water manager in the scene (of type WaterManager) and a water object that implements the IWater interface.
+This interface only needs the object to have a transform and a GetHeight method (that returns the water height at a given position).
+
+## Floater
+
+The floating object needs the PressureFloater component. This component requires a meshCollider with convex set to true and a RigidBody with gravity enabled.
+By default the floter component uses the collider mesh as the hull of the floating object.
+For complex meshes, it is good practice to give the floater a simpler mesh as the hull (through the public attribute).
+For a boat mesh, the system will assume that anything outside the mesh is water (so act as if the boat was filled with water).
 
 # The method
 
