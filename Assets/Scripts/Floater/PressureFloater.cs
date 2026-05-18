@@ -79,6 +79,7 @@ public class PressureFloater : MonoBehaviour
         triangleCandidateWater = new List<Triangle>();
 
         if (floatingMesh != null) MeshDataPrecomputation();
+        else Debug.Log("No mesh");
     }
 
 
@@ -108,6 +109,7 @@ public class PressureFloater : MonoBehaviour
     private void MeshDataPrecomputation() //Executing once the mesh has been created
     {
         floatingMesh = MeshHelper.WeldVertices(floatingMesh);
+
         // (Vector3 barycentre, float fullVolume) = MeshHelper.ComputeVolumeAndBarycentre(floatingMesh.vertices, floatingMesh.triangles, transform);
 
         //Precomputing the triangle neighbor relations and the background grid (only once at the beginning because we suppose that the mesh does not change)
@@ -291,7 +293,7 @@ public class PressureFloater : MonoBehaviour
 
 
         Vector3 angularVelocity = transform.InverseTransformDirection(boatRigidbody.angularVelocity);
-        Vector3 linearVelocity = transform.InverseTransformDirection(boatRigidbody.velocity);
+        Vector3 linearVelocity = transform.InverseTransformDirection(boatRigidbody.linearVelocity);
         (Vector3 barycentreBoat, float volumeBoat, List<Vector3> forcePositions, List<Vector3> forceDirections) = MeshHelper.ComputeVolumeAndBarycentre(underwaterTriangles.ToArray(), linearVelocity, angularVelocity, C);
 
         boatRigidbody.AddForceAtPosition(volumeBoat * 1000 * 9.81f * Vector3.up, transform.TransformPoint(barycentreBoat));
@@ -334,7 +336,7 @@ public class PressureFloater : MonoBehaviour
         Vector3 normal = Vector3.Cross(verticesPosition[0] - verticesPosition[1], verticesPosition[0] - verticesPosition[2]);
 
         Vector3 angularSpeed = transform.InverseTransformDirection(boatRigidbody.angularVelocity);
-        Vector3 linearSpeed = transform.InverseTransformDirection(boatRigidbody.velocity);
+        Vector3 linearSpeed = transform.InverseTransformDirection(boatRigidbody.linearVelocity);
 
         for (int i = 0; i < s; i++)
         {

@@ -472,7 +472,7 @@ public class Floater : MonoBehaviour
         List<Vector3> forceOrigin = new List<Vector3>();
         List<Vector3> forceDirection = new List<Vector3>();
 
-        Vector3 localVelocity = transform.InverseTransformDirection(boatRigidbody.velocity);
+        Vector3 localVelocity = transform.InverseTransformDirection(boatRigidbody.linearVelocity);
         Vector3 localAngularVelocity = transform.InverseTransformDirection(boatRigidbody.angularVelocity);
 
         if (bottomHalf is not null && trianglesSea is not null && intermediate is not null)

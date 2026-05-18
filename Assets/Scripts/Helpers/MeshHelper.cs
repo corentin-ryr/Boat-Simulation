@@ -228,9 +228,9 @@ public static class MeshHelper
     {
         List<Cell> gridBounds = new List<Cell>();
 
-        int nx = Mathf.CeilToInt(meshBounds.size.x / cellSize.x);
-        int ny = Mathf.CeilToInt(meshBounds.size.y / cellSize.y);
-        int nz = Mathf.CeilToInt(meshBounds.size.z / cellSize.z);
+        int nx = 5; // Mathf.CeilToInt(meshBounds.size.x / cellSize.x);
+        int ny = 5; // Mathf.CeilToInt(meshBounds.size.y / cellSize.y);
+        int nz = 5; // Mathf.CeilToInt(meshBounds.size.z / cellSize.z);
 
         const float margin = 0.05f;
 
