@@ -120,20 +120,44 @@ namespace TerrainGrid
 
         public VertexCollection() { vertices = new Dictionary<Vector3, Vertex>(); }
 
+        // Round to 3 decimal places to absorb float drift across chunk offsets
+        private static Vector3 Key(Vector3 p) => new Vector3(
+            Mathf.Round(p.x * 1000f) / 1000f,
+            Mathf.Round(p.y * 1000f) / 1000f,
+            Mathf.Round(p.z * 1000f) / 1000f
+        );
+
         public Vertex AddOrCreate(Vector3 position, bool isEdge = false)
         {
-            if (position.x < minX) minX = position.x;
-            if (position.x > maxX) maxX = position.x;
-            if (position.z < minX) minY = position.z;
-            if (position.z > maxX) maxY = position.z;
+            Vector3 key = Key(position);
+            if (key.x < minX) minX = key.x;
+            if (key.x > maxX) maxX = key.x;
+            if (key.z < minX) minY = key.z;
+            if (key.z > maxX) maxY = key.z;
 
-            if (!vertices.TryGetValue(position, out Vertex existing))
+            if (!vertices.TryGetValue(key, out Vertex existing))
             {
                 Vertex newVertex = new Vertex(position, isEdge);
-                vertices[position] = newVertex;
+                vertices[key] = newVertex;
                 return newVertex;
             }
             return existing;
+        }
+
+        public Vertex GetAt(Vector3 position)
+        {
+            vertices.TryGetValue(Key(position), out Vertex v);
+            return v;
+        }
+
+        public void AddVertex(Vertex vertex)
+        {
+            vertices[Key(vertex.Position)] = vertex;
+        }
+
+        public void Remove(Vertex vertex)
+        {
+            vertices.Remove(Key(vertex.Position));
         }
 
         public int Count { get => vertices.Count; }

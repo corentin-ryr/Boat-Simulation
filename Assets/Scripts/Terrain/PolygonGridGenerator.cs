@@ -7,25 +7,76 @@ namespace TerrainGrid
 {
     public class PolygonGridGenerator
     {
+        // Full pipeline — kept for standalone (non-chunked) use
         public static (HashSet<Polygon>, VertexCollection) GenerateGrid(int gridSize, float hexagonRadius, System.Random random, int nbIterRelaxation, bool normalizedRelaxation)
         {
-            VertexCollection vertices = new VertexCollection();
+            VertexCollection primalVerts = new VertexCollection();
+            GeneratePrimalPolygons(gridSize, hexagonRadius, random, Vector3.zero, nbIterRelaxation, normalizedRelaxation, primalVerts);
+            return GenerateDual(primalVerts);
+        }
 
-            List<Polygon> triangles = GenHexShape(gridSize, hexagonRadius, vertices);
+        // Step 1 — generate this chunk's primal grid (hex → merge → relax), with a world offset.
+        // Returns the polygon list and the vertex collection for this chunk only.
+        public static (List<Polygon>, VertexCollection) GeneratePrimal(int gridSize, float hexagonRadius, System.Random random, Vector3 offset, int nbIterRelaxation, bool normalizedRelaxation)
+        {
+            VertexCollection vertices = new VertexCollection();
+            List<Polygon> polygons = GeneratePrimalPolygons(gridSize, hexagonRadius, random, offset, nbIterRelaxation, normalizedRelaxation, vertices);
+            return (polygons, vertices);
+        }
+
+        private static List<Polygon> GeneratePrimalPolygons(int gridSize, float hexagonRadius, System.Random random, Vector3 offset, int nbIterRelaxation, bool normalizedRelaxation, VertexCollection vertices)
+        {
+            List<Polygon> triangles = GenHexShape(gridSize, hexagonRadius, vertices, offset);
             ComputeNeighbors(triangles);
             triangles = RandomTriangleMerge(random, triangles, vertices);
             ComputeNeighbors(triangles);
             GridRelaxation(nbIterRelaxation, normalizedRelaxation, triangles, vertices);
+            return triangles;
+        }
 
-            (HashSet<Polygon> dualPolygons, VertexCollection dualVertices) = GenerateDualGrid(vertices);
-            ComputeNeighbors(dualPolygons.ToList());
+        // Step 2 — merge a new chunk's primal vertices into the global collection,
+        // remapping shared border vertices so topology is connected across chunk seams.
+        public static void Stitch(List<Polygon> newPolygons, VertexCollection newVerts, VertexCollection globalVerts)
+        {
+            foreach (Vertex v in newVerts.ToArray())
+            {
+                Vertex existing = globalVerts.GetAt(v.Position);
+                if (existing != null)
+                {
+                    // Redirect all polygons that reference v to use the global vertex instead
+                    foreach (Polygon p in v.Polygons.ToArray())
+                    {
+                        Vertex[] verts = p.GetVertices();
+                        for (int i = 0; i < verts.Length; i++)
+                        {
+                            if (verts[i] == v)
+                            {
+                                p.SetVertex(existing, i);
+                                v.RemovePolygon(p);
+                                break;
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    globalVerts.AddVertex(v);
+                }
+            }
+        }
 
-            return (dualPolygons, dualVertices);
+        // Step 3 — generate the dual grid from the (stitched) global primal vertex collection.
+        // Skips boundary primal vertices that don't yet have all their neighbours loaded.
+        public static (HashSet<Polygon>, VertexCollection) GenerateDual(VertexCollection primalVerts)
+        {
+            (HashSet<Polygon> dual, VertexCollection dualVerts) = GenerateDualGrid(primalVerts);
+            ComputeNeighbors(dual.ToList());
+            return (dual, dualVerts);
         }
 
         #region Hexagon grid creation
 
-        private static List<Polygon> GenHexShape(int gridSize, float hexagonRadius, VertexCollection vertices)
+        private static List<Polygon> GenHexShape(int gridSize, float hexagonRadius, VertexCollection vertices, Vector3 offset = default)
         {
             List<Polygon> triangles = new List<Polygon>();
 
@@ -38,8 +89,8 @@ namespace TerrainGrid
                     double height = 2 * hexagonRadius;
                     double width = Math.Sqrt(3) * hexagonRadius;
 
-                    double posx = hexagonRadius * Math.Sqrt(3.0) * (q + r / 2.0);
-                    double posz = hexagonRadius * 3.0 / 2.0 * r;
+                    double posx = hexagonRadius * Math.Sqrt(3.0) * (q + r / 2.0) + offset.x;
+                    double posz = hexagonRadius * 3.0 / 2.0 * r + offset.z;
 
                     Vertex centerVertex = vertices.AddOrCreate(new Vector3((float)posx, 0, (float)posz));
                     Vertex vertex1 = vertices.AddOrCreate(new Vector3((float)posx, 0, (float)(posz + height / 2.0)));
@@ -112,9 +163,13 @@ namespace TerrainGrid
                 int index = random.Next(triangles.Count);
                 Polygon current = triangles[index];
 
-                List<Polygon> triangleNeighbors = current.GetNeighbors()
-                    .Where(n => n != null && n.GetVertices().Length == 3)
-                    .ToList();
+                // Never merge border triangles — keeps seam topology identical across chunks
+                bool currentIsEdge = current.GetVertices().Any(v => v.IsEdge);
+                List<Polygon> triangleNeighbors = currentIsEdge
+                    ? new List<Polygon>()
+                    : current.GetNeighbors()
+                        .Where(n => n != null && n.GetVertices().Length == 3 && !n.GetVertices().Any(v => v.IsEdge))
+                        .ToList();
 
                 if (triangleNeighbors.Count > 0)
                 {
