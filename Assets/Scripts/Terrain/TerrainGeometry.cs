@@ -24,12 +24,15 @@ namespace TerrainGrid
 
         public void SetNeighbors(Polygon[] _neighbors) { neighbors = _neighbors; }
 
+        // Allocation-free adjacency setup, used by ComputeNeighbors' edge-map pass.
+        public void InitNeighbors() { neighbors = new Polygon[vertices.Length]; }
+        public void SetNeighborAt(int edge, Polygon neighbor) { neighbors[edge] = neighbor; }
+
         public Vector3[] GetVerticesPosition()
         {
-            List<Vector3> verticesPosition = new List<Vector3>();
-            foreach (Vertex vertex in vertices)
-                verticesPosition.Add(vertex.Position);
-            return verticesPosition.ToArray();
+            Vector3[] positions = new Vector3[vertices.Length];
+            for (int i = 0; i < vertices.Length; i++) positions[i] = vertices[i].Position;
+            return positions;
         }
 
         public Vertex[] GetVertices() => vertices;
@@ -39,9 +42,13 @@ namespace TerrainGrid
             return new Vertex[] { GetVertices()[edgeNumber % vertices.Length], GetVertices()[(edgeNumber + 1) % vertices.Length] };
         }
 
+        // Centroid, summed in place — no intermediate List/array/LINQ. This is called heavily
+        // in relaxation (≈2× per polygon per iteration), so keeping it allocation-free matters.
         public Vector3 GetCenter()
         {
-            return GetVerticesPosition().Aggregate(new Vector3(0, 0, 0), (s, v) => s + v) / GetVerticesPosition().Length;
+            Vector3 sum = Vector3.zero;
+            for (int i = 0; i < vertices.Length; i++) sum += vertices[i].Position;
+            return sum / vertices.Length;
         }
 
         public Polygon[] GetNeighbors() => neighbors;
@@ -88,7 +95,10 @@ namespace TerrainGrid
         public Vertex(Vector3 _position, bool _isEdge = false) { position = _position; isEdge = _isEdge; }
 
         public Vector3 Position { get => position; }
-        public Polygon[] Polygons { get => polygons.ToArray(); }
+        // The live incident-polygon set, exposed read-only so callers can enumerate it without
+        // the per-access array allocation the old ToArray() getter caused. Do not mutate the
+        // returned collection — use AddPolygon/RemovePolygon.
+        public IReadOnlyCollection<Polygon> Polygons => polygons;
         public bool IsEdge { get => isEdge; set => isEdge = value; }
 
         public void AddPolygon(Polygon polygon) { polygons.Add(polygon); }
@@ -100,6 +110,10 @@ namespace TerrainGrid
         }
 
         public void AccumulateMovement(Vector3 movement) { this.movement += movement; }
+
+        // Unconditional move, used by the cross-chunk border relaxation pass which
+        // deliberately moves IsEdge vertices (UpdateVertexPosition leaves them pinned).
+        public void Translate(Vector3 delta) { position += delta; }
 
         public void UpdateVertexPosition()
         {

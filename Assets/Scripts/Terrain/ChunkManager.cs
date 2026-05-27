@@ -4,36 +4,94 @@ using UnityEngine;
 
 namespace TerrainGrid
 {
+    // Streaming orchestrator (a MonoBehaviour). Watches the camera and acts as one consumer of
+    // the TerrainStreamer: each time the camera crosses a chunk boundary it declares the render
+    // set (renderRadius around the camera) via SetDesired. The streamer (a background thread)
+    // loads that set plus a 1-ring halo, relaxes the seams, and publishes ready PrimalChunk
+    // copies; the main thread installs them into a render-side *mirror* model and meshes the
+    // render set through ChunkRenderer.
+    //
+    // The streamer is multi-consumer: other systems (e.g. a future simulation MonoBehaviour) can
+    // register their own consumers and request chunks independently — a chunk stays loaded while
+    // any consumer wants it. The worker is the sole mutator of the authoritative model and the
+    // only thread that touches the chunk store; the main thread only ever touches its mirror +
+    // meshes.
     public class ChunkManager : MonoBehaviour
     {
         [Header("Grid")]
         public int chunkGridSize = 5;
         public float hexRadius = 1f;
         public int nbIterRelaxation = 2;
+        public int nbIterBorderRelaxation = 4;
+        public int borderRelaxInteriorRings = 1;
         public bool normalizedRelaxation = false;
         public int seed = 0;
 
         [Header("Streaming")]
-        public int loadRadius = 2;
+        public int renderRadius = 2;
         public Transform cameraTarget;
 
         [Header("Rendering")]
         public Material groundMaterial;
 
-        readonly Dictionary<ChunkCoord, List<Polygon>> loadedPrimalChunks = new();
-        readonly VertexCollection globalPrimalVerts = new();
-        readonly Dictionary<ChunkCoord, GameObject> chunkObjects = new();
+        [Header("Debug")]
+        public bool showPrimalGizmos = false;
+        public Color primalGizmoColor = new Color(0.3f, 0.8f, 1f);
+        public Color edgeVertexColor = new Color(1f, 0.3f, 0.3f);
+        public float edgeVertexSize = 0.08f;
+        public bool showDualGizmos = false;
+        public Color dualGizmoColor = new Color(1f, 0.8f, 0.2f);
 
+        TerrainStreamer streamer;       // owns the authoritative model on a worker thread
+        TerrainModel renderModel;       // main-thread mirror the renderer reads from
+        ChunkRenderer chunkRenderer;
+        ChunkConsumer renderConsumer;   // this manager's request to the streamer
+
+        // Shared with other systems (e.g. SimulationManager) so they can register their own
+        // consumers. Available after Start(). Null until then.
+        public TerrainStreamer Streamer => streamer;
         ChunkCoord lastCameraChunk;
+        HashSet<ChunkCoord> currentRenderSet; // chunks we want meshed (renderRadius around camera)
 
         ChunkCoord WorldToChunk(Vector3 pos) => ChunkCoord.FromWorldPos(pos, hexRadius, chunkGridSize);
-        Vector3 ChunkToWorld(ChunkCoord coord) => coord.WorldCenter(hexRadius, chunkGridSize);
+
+        HashSet<ChunkCoord> RenderSetAround(ChunkCoord center) =>
+            new HashSet<ChunkCoord>(center.HexesInRange(renderRadius));
 
         void Start()
         {
             if (cameraTarget == null) cameraTarget = Camera.main?.transform;
+
+            // Authoritative model — lives behind the streamer, mutated only on the worker.
+            TerrainModel model = new TerrainModel
+            {
+                chunkGridSize = chunkGridSize,
+                hexRadius = hexRadius,
+                seed = seed,
+                nbIterRelaxation = nbIterRelaxation,
+                nbIterBorderRelaxation = nbIterBorderRelaxation,
+                borderRelaxInteriorRings = borderRelaxInteriorRings,
+                normalizedRelaxation = normalizedRelaxation,
+                Store = new MemoryChunkStore(),
+            };
+
+            // Mirror — populated with ready chunk copies on the main thread, read by the renderer.
+            // No store and no generation: the worker is the sole owner of those.
+            renderModel = new TerrainModel { chunkGridSize = chunkGridSize, hexRadius = hexRadius };
+            chunkRenderer = new ChunkRenderer(renderModel, transform, groundMaterial);
+
+            // Register as a render-ready consumer: the streamer loads our requested chunks plus a
+            // 1-ring halo, relaxes their seams, and publishes deep copies for us to mesh.
+            streamer = new TerrainStreamer(model);
+            renderConsumer = streamer.RegisterConsumer(renderReady: true);
+
             lastCameraChunk = WorldToChunk(cameraTarget.position);
-            UpdateChunks(lastCameraChunk);
+            currentRenderSet = RenderSetAround(lastCameraChunk);
+            streamer.SetDesired(renderConsumer, currentRenderSet);
+            // Block once so the opening view isn't empty, then go fully async.
+            streamer.Prime();
+            DrainResults();
+            streamer.Start();
         }
 
         void Update()
@@ -42,114 +100,71 @@ namespace TerrainGrid
             if (current != lastCameraChunk)
             {
                 lastCameraChunk = current;
-                UpdateChunks(current);
+                currentRenderSet = RenderSetAround(current);
+                streamer.SetDesired(renderConsumer, currentRenderSet);
             }
+
+            DrainResults();
         }
 
-        void UpdateChunks(ChunkCoord center)
+        // Apply every published pass that arrived since last frame to the mirror model, then
+        // refresh the render layer once against the current render set.
+        void DrainResults()
         {
-            HashSet<ChunkCoord> target = new(center.HexesInRange(loadRadius));
-            HashSet<ChunkCoord> loaded = new(loadedPrimalChunks.Keys);
-
-            foreach (ChunkCoord coord in loaded.Except(target).ToList())
-                UnloadChunk(coord);
-
-            foreach (ChunkCoord coord in target.Except(loaded))
-                LoadChunk(coord);
-
-            RebuildMeshes();
-        }
-
-        void LoadChunk(ChunkCoord coord)
-        {
-            int chunkSeed = seed ^ (coord.q * 73856093) ^ (coord.r * 19349663);
-            var random = new System.Random(chunkSeed);
-
-            var (polygons, verts) = PolygonGridGenerator.GeneratePrimal(
-                chunkGridSize, hexRadius, random, ChunkToWorld(coord), nbIterRelaxation, normalizedRelaxation);
-
-            PolygonGridGenerator.Stitch(polygons, verts, globalPrimalVerts);
-            loadedPrimalChunks[coord] = polygons;
-        }
-
-        void UnloadChunk(ChunkCoord coord)
-        {
-            foreach (Polygon p in loadedPrimalChunks[coord])
+            bool applied = false;
+            while (streamer.TryDrainResult(renderConsumer, out StreamResult result))
             {
-                foreach (Vertex v in p.GetVertices())
+                if (result.Error != null) { Debug.LogException(result.Error); continue; }
+
+                foreach (PrimalChunk pc in result.Changed)
+                    renderModel.Install(pc);
+
+                foreach (ChunkCoord coord in renderModel.LoadedCoords.Where(c => !result.Loaded.Contains(c)).ToList())
+                    renderModel.Evict(coord);
+
+                applied = true;
+            }
+
+            if (applied)
+                chunkRenderer.SyncTo(currentRenderSet);
+        }
+
+        void OnDestroy() => streamer?.Stop();
+
+        void OnDrawGizmos()
+        {
+            // Gizmos read the main-thread mirror (the worker's model is off-limits here).
+            if (renderModel == null) return;
+
+            if (showPrimalGizmos)
+            {
+                foreach (ChunkCoord coord in renderModel.LoadedCoords)
                 {
-                    v.RemovePolygon(p);
-                    if (v.Polygons.Length == 0)
-                        globalPrimalVerts.Remove(v);
-                }
-            }
-            loadedPrimalChunks.Remove(coord);
-        }
+                    if (!renderModel.TryGet(coord, out PrimalChunk primal)) continue;
 
-        void RebuildMeshes()
-        {
-            var (dualPolygons, _) = PolygonGridGenerator.GenerateDual(globalPrimalVerts);
+                    Gizmos.color = primalGizmoColor;
+                    foreach (Polygon p in primal.Polygons) DrawPolygon(p);
 
-            // Group dual polygons by which chunk their center falls in
-            var byChunk = new Dictionary<ChunkCoord, List<Polygon>>();
-            foreach (Polygon p in dualPolygons)
-            {
-                ChunkCoord coord = WorldToChunk(p.GetCenter());
-                if (!byChunk.TryGetValue(coord, out var list))
-                    byChunk[coord] = list = new List<Polygon>();
-                list.Add(p);
-            }
-
-            // Build / update mesh objects
-            foreach (var (coord, polygons) in byChunk)
-            {
-                if (!chunkObjects.TryGetValue(coord, out GameObject go))
-                {
-                    go = new GameObject($"Chunk {coord}");
-                    go.transform.SetParent(transform, false);
-                    go.AddComponent<MeshFilter>();
-                    go.AddComponent<MeshRenderer>().material = groundMaterial;
-                    chunkObjects[coord] = go;
-                }
-                BuildMesh(go.GetComponent<MeshFilter>(), polygons);
-            }
-
-            // Destroy chunk objects whose dual polygons are gone
-            foreach (ChunkCoord coord in chunkObjects.Keys.Except(byChunk.Keys).ToList())
-            {
-                Destroy(chunkObjects[coord]);
-                chunkObjects.Remove(coord);
-            }
-        }
-
-        static void BuildMesh(MeshFilter mf, List<Polygon> polygons)
-        {
-            var vertices = new List<Vector3>();
-            var triangles = new List<int>();
-
-            foreach (Polygon p in polygons)
-            {
-                Vector3[] verts = p.GetVerticesPosition();
-                if (verts.Length < 3) continue;
-                int baseIndex = vertices.Count;
-                vertices.AddRange(verts);
-                for (int i = 1; i < verts.Length - 1; i++)
-                {
-                    triangles.Add(baseIndex);
-                    triangles.Add(baseIndex + i + 1);
-                    triangles.Add(baseIndex + i);
+                    Gizmos.color = edgeVertexColor;
+                    foreach (Polygon p in primal.Polygons)
+                        foreach (Vertex v in p.GetVertices())
+                            if (v.IsEdge) Gizmos.DrawSphere(v.Position, edgeVertexSize);
                 }
             }
 
-            Mesh mesh = new Mesh
+            if (showDualGizmos && chunkRenderer != null)
             {
-                indexFormat = UnityEngine.Rendering.IndexFormat.UInt32,
-                vertices = vertices.ToArray(),
-                triangles = triangles.ToArray()
-            };
-            mesh.RecalculateNormals();
-            mesh.RecalculateBounds();
-            mf.mesh = mesh;
+                Gizmos.color = dualGizmoColor;
+                foreach (List<Polygon> dual in chunkRenderer.DualPolygons)
+                    foreach (Polygon p in dual) DrawPolygon(p);
+            }
+        }
+
+        static void DrawPolygon(Polygon p)
+        {
+            Vector3[] verts = p.GetVerticesPosition();
+            for (int i = 0; i < verts.Length; i++)
+                Gizmos.DrawLine(verts[i], verts[(i + 1) % verts.Length]);
         }
     }
 }

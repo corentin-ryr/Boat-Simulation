@@ -26,8 +26,18 @@ namespace TerrainGrid
         [Header("Rendering")]
         public Material groundMaterial;
 
+        [Header("Debug")]
+        public bool showPrimalGizmos = false;
+        public Color primalGizmoColor = new Color(0.3f, 0.8f, 1f);
+        public Color edgeVertexColor = new Color(1f, 0.3f, 0.3f);
+        public float edgeVertexSize = 0.08f;
+        public bool showDualGizmos = false;
+        public Color dualGizmoColor = new Color(1f, 0.8f, 0.2f);
+
         public HashSet<Polygon> DualPolygons { get; private set; } = new HashSet<Polygon>();
         public VertexCollection DualVertices { get; private set; } = new VertexCollection();
+
+        List<Polygon> primalPolygons = new List<Polygon>();
 
         System.Random random;
 
@@ -36,7 +46,9 @@ namespace TerrainGrid
             seed = randomizeSeed ? UnityEngine.Random.Range(-10000, 10000) : seed;
             random = new System.Random(seed);
 
-            (DualPolygons, DualVertices) = PolygonGridGenerator.GenerateGrid(gridSize, hexagonRadius, random, nbIterRelaxation, normalizedRelaxation);
+            VertexCollection primalVerts;
+            (primalPolygons, primalVerts) = PolygonGridGenerator.GeneratePrimal(gridSize, hexagonRadius, random, Vector3.zero, nbIterRelaxation, normalizedRelaxation);
+            (DualPolygons, DualVertices) = PolygonGridGenerator.GenerateDual(primalVerts);
 
             GenerateHeightMap();
             GenerateMesh();
@@ -116,6 +128,36 @@ namespace TerrainGrid
         }
 
         #region Debug
+
+        void OnDrawGizmos()
+        {
+            if (showPrimalGizmos)
+            {
+                Gizmos.color = primalGizmoColor;
+                foreach (Polygon p in primalPolygons)
+                {
+                    Vector3[] verts = p.GetVerticesPosition();
+                    for (int i = 0; i < verts.Length; i++)
+                        Gizmos.DrawLine(verts[i], verts[(i + 1) % verts.Length]);
+                }
+
+                Gizmos.color = edgeVertexColor;
+                foreach (Polygon p in primalPolygons)
+                    foreach (Vertex v in p.GetVertices())
+                        if (v.IsEdge) Gizmos.DrawSphere(v.Position, edgeVertexSize);
+            }
+
+            if (showDualGizmos)
+            {
+                Gizmos.color = dualGizmoColor;
+                foreach (Polygon p in DualPolygons)
+                {
+                    Vector3[] verts = p.GetVerticesPosition();
+                    for (int i = 0; i < verts.Length; i++)
+                        Gizmos.DrawLine(verts[i], verts[(i + 1) % verts.Length]);
+                }
+            }
+        }
 
         public static void ShowMesh(Polygon[] polygons, Color color)
         {

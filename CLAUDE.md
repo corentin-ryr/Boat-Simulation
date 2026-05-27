@@ -61,6 +61,55 @@ Two approaches (swap per scene/object):
 | `Geometry.cs` | `Edge` struct for icosahedron mesh topology |
 | `DebugHelper.cs` | Gizmo drawing for forces, bounds, wireframe meshes |
 
+## Terrain Generation (Townscaper-style primal/dual)
+
+`Assets/Scripts/Terrain/` — an irregular quad-grid terrain built with a deliberate
+**primal/dual split**. See `TERRAIN_SYSTEM.md` for the full pipeline.
+
+**Primal grid** (`PolygonGridGenerator.GeneratePrimal`) — the *logical/data* grid.
+Townscaper construction: triangle lattice (`GenHexShape`) → random triangle merge →
+ortho subdivide into quads (`SubdividePolygon`) → relax (borders pinned). Cheap to
+generate, so it can be produced broadly — including non-visible parts of the map —
+for occupancy, adjacency, gameplay, and streaming logic.
+
+**Dual grid** (`GenerateDualGrid`) — the *rendered surface + transitions* grid.
+Standard mesh dual (primal vertex → dual cell, primal face-center → dual vertex), so
+dual cells sit on the junctions where primal cells meet (natural home for
+corner/transition meshing). More expensive, so compute it **only for the near-camera
+region**. The dual is what gets rendered.
+
+Design intent: primal answers "what exists?" (cheap, wide), dual answers "how does it
+render/connect?" (costly, only where visible).
+
+**Chunking** (`ChunkCoord`) — each chunk is a flat-top regular hexagon region of the
+triangle lattice, circumradius `chunkGridSize · hexRadius`; chunks tile as a honeycomb
+(`WorldCenter` uses `size = chunkGridSize · hexRadius`). No ghost ring — border vertices
+coincide exactly across neighbors. Cross-chunk matching (seam welding in `RelaxBorders`,
+dual cell completion + ownership in `GenerateDual`) keys on a deterministic integer
+`LatticeKey(position)`, not rounded floats, so coincident copies always match.
+
+**Streaming / threading** — decoupled layers, each in its own file:
+- `TerrainModel` — the authoritative, Unity-free data layer: owns loaded `PrimalChunk`s,
+  generation, joint border relaxation, and the chunk store.
+- `IChunkStore` / `MemoryChunkStore` (`ChunkStore.cs`) — unloaded chunks are snapshotted
+  (`ChunkSnapshot`) and restored exactly on reload, so relaxed state survives (in-memory now;
+  swap for a disk backend later).
+- `TerrainStreamer` — a single background worker that owns the model and serves **multiple
+  consumers**. Each consumer (`RegisterConsumer`) declares a desired set of coords via
+  `SetDesired` and drains ready chunks via `TryDrainResult`. Service levels: *render-ready*
+  (chunks + 1-ring halo, seams relaxed, published as deep copies) vs *primal-only* (raw,
+  no halo/relax — for gameplay/occupancy). The worker loads the union of all consumers' sets;
+  a chunk stays loaded while any consumer wants it. Generation runs in parallel
+  (`Parallel.For`); relaxation is incremental (only freshly-generated chunks + neighbours);
+  restored/settled chunks are never re-relaxed.
+- `ChunkRenderer` — render layer (a render-ready consumer's view): turns published primal
+  copies into dual grids + meshes, version-gated. Reads a main-thread *mirror* `TerrainModel`,
+  never the worker's authoritative one.
+- `ChunkManager` — the MonoBehaviour orchestrator: one render-ready consumer that declares
+  `renderRadius` around the camera, installs published copies into the mirror, and meshes.
+
+Debug: `showPrimalGizmos` / `showDualGizmos` on `ChunkManager` and `GridGenerator`.
+
 ## Key Constants
 
 - Water density: 1000 kg/m³, viscosity: 1e-3 Pa·s

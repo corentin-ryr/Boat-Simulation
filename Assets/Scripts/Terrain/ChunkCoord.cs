@@ -4,34 +4,39 @@ using UnityEngine;
 
 namespace TerrainGrid
 {
-    public struct ChunkCoord : IEquatable<ChunkCoord>
+    public struct ChunkCoord : IEquatable<ChunkCoord>, IComparable<ChunkCoord>
     {
         public int q, r;
 
         public ChunkCoord(int q, int r) { this.q = q; this.r = r; }
 
-        // Basis vectors for the chunk lattice, derived from the inner hex cell geometry.
-        // For a chunk of gridSize=N and hexRadius=R:
-        //   e1 (axial step +q): R·√3·(2N+1) in x, 0 in z
-        //   e2 (axial step +r): R·√3·N in x,  R·(3N+2) in z
-        // These ensure that border vertices of adjacent chunks fall at exactly the
-        // same world positions and can be stitched by position deduplication.
+        // A chunk is a flat-top regular hexagon region of the triangle lattice, with
+        // circumradius = chunkGridSize · hexRadius (corner lattice point (N,0) lands at
+        // world (N·hexRadius, 0)). Chunks tile as a honeycomb at this circumradius, so the
+        // axial→world mapping uses the standard flat-top hex layout with size = N·hexRadius.
+        // This makes adjacent chunks share an edge and their border lattice vertices coincide.
         public Vector3 WorldCenter(float hexRadius, int chunkGridSize)
         {
-            float e1x = hexRadius * Mathf.Sqrt(3f) * (2 * chunkGridSize + 1);
-            float e2x = hexRadius * Mathf.Sqrt(3f) * chunkGridSize;
-            float e2z = hexRadius * (3 * chunkGridSize + 2);
-            return new Vector3(q * e1x + r * e2x, 0f, r * e2z);
+            float size = chunkGridSize * hexRadius;
+
+            float x = size * 1.5f * q;
+            float z = size * Mathf.Sqrt(3f) * (r + q * 0.5f);
+
+            return new Vector3(x, 0f, z);
         }
 
         public static ChunkCoord FromWorldPos(Vector3 pos, float hexRadius, int chunkGridSize)
         {
-            float e1x = hexRadius * Mathf.Sqrt(3f) * (2 * chunkGridSize + 1);
-            float e2x = hexRadius * Mathf.Sqrt(3f) * chunkGridSize;
-            float e2z = hexRadius * (3 * chunkGridSize + 2);
-            float fr = pos.z / e2z;
-            float fq = (pos.x - fr * e2x) / e1x;
-            return Round(fq, fr);
+            float size = chunkGridSize * hexRadius;
+
+            float q = 2f / 3f * pos.x / size;
+
+            float r =
+                (-1f / 3f * pos.x +
+                 Mathf.Sqrt(3f) / 3f * pos.z)
+                / size;
+
+            return Round(q, r);
         }
 
         static ChunkCoord Round(float fq, float fr)
@@ -54,6 +59,10 @@ namespace TerrainGrid
                     yield return new ChunkCoord(q + dq, r + dr);
             }
         }
+
+        // Lexicographic order on (q, r). Used to pick a single deterministic owner for a
+        // dual cell shared by several chunks at a seam, so it is rendered exactly once.
+        public int CompareTo(ChunkCoord other) => q != other.q ? q.CompareTo(other.q) : r.CompareTo(other.r);
 
         public bool Equals(ChunkCoord other) => q == other.q && r == other.r;
         public override bool Equals(object obj) => obj is ChunkCoord c && Equals(c);
