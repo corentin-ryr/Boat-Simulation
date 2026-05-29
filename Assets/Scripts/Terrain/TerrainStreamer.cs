@@ -210,11 +210,36 @@ namespace TerrainGrid
             }
             model.RelaxBorders(active);
 
+            // Precompute effective sets per consumer (reused for both dual build and publish)
+            // and the union of dual-needing chunks (render-ready consumers only — primal-only
+            // consumers don't render and don't need dual data).
+            var effectives = new List<HashSet<ChunkCoord>>(snap.Count);
+            var dualUnion = new HashSet<ChunkCoord>();
+            for (int i = 0; i < snap.Count; i++)
+            {
+                HashSet<ChunkCoord> eff = renderSnap[i] ? ExpandRing(desiredSnap[i]) : desiredSnap[i];
+                effectives.Add(eff);
+                if (renderSnap[i]) dualUnion.UnionWith(eff);
+            }
+
+            // Build any stale duals in parallel. Each BuildDual reads neighbouring primals
+            // (no concurrent writes at this point) and writes only its own chunk's Dual,
+            // so the loop is safe to parallelise per coord.
+            var toBuild = new List<ChunkCoord>();
+            foreach (ChunkCoord coord in dualUnion)
+                if (model.NeedsDual(coord)) toBuild.Add(coord);
+            if (toBuild.Count > 0)
+                Parallel.For(0, toBuild.Count, k => model.BuildDual(toBuild[k]));
+
+            if (NewerPending()) return; // stale: built duals stay on chunks for next pass to reuse
+
             // Publish per consumer: deep-copy chunks in its effective set whose version changed.
+            // Version bumps come from either vertex moves (relax) or dual cascade invalidation,
+            // so this catches both kinds of "the consumer's mesh is stale".
             for (int i = 0; i < snap.Count; i++)
             {
                 ConsumerState s = snap[i];
-                HashSet<ChunkCoord> effective = renderSnap[i] ? ExpandRing(desiredSnap[i]) : desiredSnap[i];
+                HashSet<ChunkCoord> effective = effectives[i];
 
                 var changed = new List<PrimalChunk>();
                 foreach (ChunkCoord coord in effective)

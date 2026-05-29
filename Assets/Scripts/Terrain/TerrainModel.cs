@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 
 namespace TerrainGrid
@@ -62,6 +63,8 @@ namespace TerrainGrid
         // Try to make a chunk active without generating. Order: already loaded → cache hit
         // (cheap, in-memory move) → store hit (deserialize). Returns true on any hit. The
         // streamer uses this in classification: anything that fails goes to parallel generation.
+        // Cascades on promotion (cache or store): our 6 neighbours' duals may have been built
+        // without us while we were away — they'll rebuild on the next BuildDual.
         public bool TryReactivate(ChunkCoord coord)
         {
             if (chunks.ContainsKey(coord)) return true;
@@ -69,11 +72,13 @@ namespace TerrainGrid
             {
                 cache.Remove(coord);
                 chunks[coord] = cached;
+                InvalidateNeighborDuals(coord);
                 return true;
             }
             if (Store != null && Store.Has(coord))
             {
                 chunks[coord] = ChunkSnapshot.Restore(coord, Store.Load(coord));
+                InvalidateNeighborDuals(coord);
                 return true;
             }
             return false;
@@ -91,8 +96,14 @@ namespace TerrainGrid
         // insert it — the caller adds it via AddChunk on the owning thread.
         public PrimalChunk GenerateChunk(ChunkCoord coord) => Generate(coord);
 
-        // Insert a generated chunk into the authoritative set (serial).
-        public void AddChunk(PrimalChunk chunk) => chunks[chunk.Coord] = chunk;
+        // Insert a generated chunk into the authoritative set (serial). Cascades: this chunk's
+        // 6 loaded-or-cached neighbours had their cached duals (if any) built without us — now
+        // stale. Invalidate them so the next BuildDual rebuilds with our data.
+        public void AddChunk(PrimalChunk chunk)
+        {
+            chunks[chunk.Coord] = chunk;
+            InvalidateNeighborDuals(chunk.Coord);
+        }
 
         // Generate a chunk's primal grid (interior relaxed, borders pinned at deterministic
         // lattice positions).
@@ -149,29 +160,86 @@ namespace TerrainGrid
         // to read. These apply a publish without generating or persisting — the worker is the
         // sole owner of generation and the chunk store.
 
-        // Install a chunk restored from a worker snapshot, replacing any existing one, and
-        // drop the cached Dual on each of this chunk's 6 loaded neighbours. We have to
-        // cascade in two cases:
-        //   • New chunk: neighbours that built their dual before this chunk arrived had
-        //     LookupPrimal return null for our coord, so their X-Y seam cells were dropped
-        //     (<3 faces). They need to rebuild now that we exist.
-        //   • New version: neighbours' seam cells were built against the previous version's
-        //     quad positions and are now stale.
-        // Both cases are handled by unconditionally invalidating neighbours. They rebuild
-        // lazily on the next ChunkSurface.Apply().
-        public void Install(PrimalChunk chunk)
-        {
-            foreach (ChunkCoord n in chunk.Coord.HexesInRange(1))
-                if (n != chunk.Coord && chunks.TryGetValue(n, out PrimalChunk neighbor))
-                {
-                    neighbor.Dual = null;
-                    neighbor.DualBuiltFromVersion = -1;
-                }
-            chunks[chunk.Coord] = chunk;
-        }
+        // Install a chunk on the main-thread mirror. The chunk arrives with its dual already
+        // built by the worker — and the worker also rebuilt any neighbours whose duals our
+        // arrival invalidated, so those are coming in this same publish batch. No mirror-
+        // side cascade needed.
+        public void Install(PrimalChunk chunk) => chunks[chunk.Coord] = chunk;
 
         // Drop a mirrored chunk without persisting (the worker owns persistence).
         public void Evict(ChunkCoord coord) => chunks.Remove(coord);
+
+        // --- Worker-side dual computation ---
+        // After load/relax and before publish, the streamer asks for any chunks whose dual
+        // is stale to be (re)built — in parallel. The dual is then carried along with the
+        // primal in the deep-copy to consumers.
+
+        // Worker-side check: does this chunk need its dual (re)built?
+        public bool NeedsDual(ChunkCoord coord)
+        {
+            return chunks.TryGetValue(coord, out PrimalChunk c)
+                && (c.Dual == null || c.DualBuiltFromVersion != c.Version);
+        }
+
+        // Build this chunk's dual using its own primal + loaded neighbours' primals as
+        // cross-chunk context (for completing border cells and computing deterministic
+        // ownership). Safe to call in parallel for different coords: reads model.chunks
+        // (no concurrent mutation at this point of the pass) and writes only chunk.Dual
+        // on the specific coord.
+        public void BuildDual(ChunkCoord coord)
+        {
+            if (!chunks.TryGetValue(coord, out PrimalChunk chunk)) return;
+            if (chunk.Dual != null && chunk.DualBuiltFromVersion == chunk.Version) return;
+
+            Dictionary<(int, int), List<Polygon>> neighborFaces = new();
+            Dictionary<(int, int), ChunkCoord> minNeighborCoord = new();
+
+            foreach (ChunkCoord n in coord.HexesInRange(1))
+            {
+                if (n == coord) continue;
+                if (!chunks.TryGetValue(n, out PrimalChunk np)) continue;
+
+                foreach (Vertex v in np.Verts.ToArray())
+                {
+                    if (!v.IsEdge) continue;
+                    (int, int) key = PolygonGridGenerator.LatticeKey(v.Position, hexRadius);
+
+                    if (!neighborFaces.TryGetValue(key, out List<Polygon> list))
+                        neighborFaces[key] = list = new List<Polygon>();
+                    list.AddRange(v.Polygons);
+
+                    if (!minNeighborCoord.TryGetValue(key, out ChunkCoord cur) || n.CompareTo(cur) < 0)
+                        minNeighborCoord[key] = n;
+                }
+            }
+
+            var (dualPolygons, _) = PolygonGridGenerator.GenerateDual(
+                chunk, hexRadius, neighborFaces, minNeighborCoord);
+            chunk.Dual = dualPolygons.ToList();
+            chunk.DualBuiltFromVersion = chunk.Version;
+        }
+
+        // Invalidate the cached dual on every loaded-or-cached neighbour of `coord`. The
+        // version bump in InvalidateDual makes the publish loop notice — the chunk's primal
+        // didn't change but its visible state did. Idempotent: re-invalidating an already-
+        // invalidated chunk is a no-op (Dual already null, version not re-bumped).
+        void InvalidateNeighborDuals(ChunkCoord coord)
+        {
+            foreach (ChunkCoord n in coord.HexesInRange(1))
+            {
+                if (n == coord) continue;
+                if (chunks.TryGetValue(n, out PrimalChunk active)) InvalidateDual(active);
+                else if (cache.TryGetValue(n, out PrimalChunk cached)) InvalidateDual(cached);
+            }
+        }
+
+        static void InvalidateDual(PrimalChunk c)
+        {
+            if (c.Dual == null) return; // already stale; don't re-bump version
+            c.Dual = null;
+            c.DualBuiltFromVersion = -1;
+            c.Version++;
+        }
 
         // Joint border relaxation over only the `active` chunks (the freshly-generated frontier
         // plus their loaded neighbours). Restored and settled chunks are deliberately excluded —
@@ -196,7 +264,16 @@ namespace TerrainGrid
                 collections, hexRadius, nbIterBorderRelaxation, borderRelaxInteriorRings);
 
             foreach (int i in moved)
-                chunks[coords[i]].Version++;
+            {
+                PrimalChunk c = chunks[coords[i]];
+                c.Version++;
+                // Own dual is stale (vertices moved); kill it directly without re-bumping the
+                // version we just incremented.
+                c.Dual = null;
+                c.DualBuiltFromVersion = -1;
+                // Cascade: neighbours' seam cells used our pre-move quad positions.
+                InvalidateNeighborDuals(c.Coord);
+            }
         }
     }
 }

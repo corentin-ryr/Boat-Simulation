@@ -9,15 +9,18 @@ namespace TerrainGrid
         public List<Polygon> Polygons;
         public VertexCollection Verts;
 
-        // Incremented by the border-relaxation pass whenever this chunk's vertices move,
-        // so the render layer can detect a stale mesh and rebuild only when needed.
+        // Incremented when this chunk's visible state changes — either border-relaxation
+        // moved its vertices (primal change) OR a neighbour cascade invalidated this
+        // chunk's cached dual (dual change with no primal change). The streamer's publish
+        // loop uses Version to detect what to re-send to each consumer.
         public int Version;
 
         // Cached dual: this chunk's owned cells (under deterministic "lowest ChunkCoord
-        // wins" ownership), lazily built by ChunkSurface and reused across presentations.
-        // Fresh chunks have null Dual; the surface builds it on first need. Invalidated when
-        // this chunk's version changes, or when a neighbour's version changes (the cascade
-        // is performed in TerrainModel.Install — neighbours' Dual is set to null).
+        // wins" ownership). Built by the streamer worker after relaxation and before
+        // publish, so consumers receive it ready-made — the main thread doesn't compute
+        // polygon math. Stale when DualBuiltFromVersion != Version; invalidated either by
+        // the chunk's own primal moving or by a neighbour's primal moving (the cascade is
+        // performed in TerrainModel — see InvalidateNeighborDuals).
         public List<Polygon> Dual;
         public int DualBuiltFromVersion = -1;
 
@@ -61,7 +64,29 @@ namespace TerrainGrid
                 polys.Add(new Polygon(dst)); // ctor re-links vertex -> polygon associations
             }
 
-            return new PrimalChunk(Coord, polys, vc) { Version = Version };
+            // Copy the cached dual too. Dual polygons own their own Vertex objects (no
+            // shared refs with the primal graph), so we build a fresh independent set —
+            // consumer mirrors then never see worker-side mutations to vertex positions.
+            List<Polygon> dualCopy = null;
+            if (Dual != null)
+            {
+                dualCopy = new List<Polygon>(Dual.Count);
+                foreach (Polygon p in Dual)
+                {
+                    Vertex[] src = p.GetVertices();
+                    Vertex[] dst = new Vertex[src.Length];
+                    for (int i = 0; i < src.Length; i++)
+                        dst[i] = new Vertex(src[i].Position, src[i].IsEdge);
+                    dualCopy.Add(new Polygon(dst));
+                }
+            }
+
+            return new PrimalChunk(Coord, polys, vc)
+            {
+                Version = Version,
+                Dual = dualCopy,
+                DualBuiltFromVersion = DualBuiltFromVersion,
+            };
         }
     }
 }

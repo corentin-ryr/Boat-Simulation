@@ -14,15 +14,13 @@ namespace TerrainGrid
     // SimulationManager registers a collider-only request for the chunks under its agents.
     // Each client is expected to have already expanded its user-facing set to include the
     // minimal halo of lower-coord neighbours that own the perimeter cells — see
-    // ChunkCoord.MinimalHalo. The surface itself takes the set at face value.
+    // ChunkCoord.MinimalHalo.
     //
-    // Dual ownership is deterministic: each border cell is owned by the lowest-coord
-    // contributing chunk, independent of which chunks happen to be presented. The dual is
-    // cached on the PrimalChunk (so it survives across Apply calls, presentation toggles,
-    // and per-frame churn). It's invalidated when the chunk's version changes (handled by
-    // PrimalChunk.Version itself) or any neighbour's version changes (handled by the
-    // cascade in TerrainModel.Install). The Unity Mesh is per-presence (Unity objects can't
-    // travel) but rebuilt only when the cached dual has changed.
+    // Phase 2: the dual is built by the streamer worker (in parallel, alongside relaxation)
+    // and travels on the PrimalChunk through the publish pipeline. The surface no longer
+    // computes any polygon math — it just builds Unity Mesh objects from primal.Dual when
+    // the chunk's version changes. All cross-chunk lookups, ownership arbitration, and
+    // cascade invalidation happen on the worker thread.
     public class ChunkSurface
     {
         class Presence
@@ -32,13 +30,11 @@ namespace TerrainGrid
             public MeshRenderer Mr;     // null when not currently rendered
             public MeshCollider Mc;     // null when not currently collided
             public Mesh Mesh;
-            public List<Polygon> DualRef; // last dual list we built the Mesh from (identity check)
             public int MeshBuiltFromVersion = -1;
         }
 
         readonly Transform parent;
         readonly Material material;
-        readonly float hexRadius;
 
         readonly List<Func<ChunkCoord, PrimalChunk>> primalSources = new();
         readonly Dictionary<object, HashSet<ChunkCoord>> renderRequests = new();
@@ -49,7 +45,9 @@ namespace TerrainGrid
         {
             this.parent = parent;
             this.material = material;
-            this.hexRadius = hexRadius;
+            // hexRadius is no longer used by the surface (dual is pre-built by the worker)
+            // but kept in the signature to avoid churn at construction sites.
+            _ = hexRadius;
         }
 
         // For debug gizmos: the cached duals of every presented chunk's primal.
@@ -88,7 +86,7 @@ namespace TerrainGrid
         }
 
         // Reconcile scene presence with the current requests. Cheap when nothing changed;
-        // safe to call every frame. Steady-state cost is one HashSet build + iterate.
+        // safe to call every frame.
         public void Apply()
         {
             HashSet<ChunkCoord> renderUnion = Union(renderRequests);
@@ -96,11 +94,9 @@ namespace TerrainGrid
             HashSet<ChunkCoord> wanted = new HashSet<ChunkCoord>(renderUnion);
             wanted.UnionWith(colliderUnion);
 
-            // Drop presences nobody wants anymore.
             foreach (ChunkCoord coord in presences.Keys.Where(c => !wanted.Contains(c)).ToList())
                 DestroyPresence(coord);
 
-            // Create/update for wanted coords.
             foreach (ChunkCoord coord in wanted)
                 EnsurePresence(coord, renderUnion.Contains(coord), colliderUnion.Contains(coord));
         }
@@ -108,21 +104,11 @@ namespace TerrainGrid
         void EnsurePresence(ChunkCoord coord, bool wantRender, bool wantCollider)
         {
             PrimalChunk primal = LookupPrimal(coord);
-            if (primal == null) return; // not arrived in any mirror yet; try again next Apply.
+            // Either the primal hasn't arrived yet, or it arrived but the worker hasn't
+            // built its dual yet (rare — happens briefly during initial streaming bursts).
+            // Skip; we'll try again next Apply.
+            if (primal == null || primal.Dual == null) return;
 
-            // (a) Make sure the chunk has a cached dual at the current version. The dual
-            // belongs to the chunk, not the presence — it survives presentation churn and is
-            // invalidated only by version changes (own or neighbour, via TerrainModel.Install).
-            if (primal.Dual == null || primal.DualBuiltFromVersion != primal.Version)
-            {
-                BuildNeighborBorderMaps(coord, out var neighborFaces, out var minNeighborCoord);
-                var (dualPolygons, _) = PolygonGridGenerator.GenerateDual(
-                    primal, hexRadius, neighborFaces, minNeighborCoord);
-                primal.Dual = dualPolygons.ToList();
-                primal.DualBuiltFromVersion = primal.Version;
-            }
-
-            // (b) Make sure a Presence exists with a MeshFilter (always needed).
             if (!presences.TryGetValue(coord, out Presence p))
             {
                 GameObject go = new GameObject($"Chunk {coord}");
@@ -135,20 +121,18 @@ namespace TerrainGrid
                 presences[coord] = p;
             }
 
-            // (c) Rebuild the Unity Mesh only when the underlying dual has actually changed.
-            // Identity check on DualRef catches both the version bump (new list assigned) and
-            // the cascade invalidation (Dual replaced with a fresh list).
-            if (p.MeshBuiltFromVersion != primal.Version || !ReferenceEquals(p.DualRef, primal.Dual))
+            // Rebuild the Unity Mesh only when the chunk's version moves. Version covers
+            // both primal changes (relaxation moved vertices) and dual changes (a neighbour
+            // cascade invalidated our cell ownership) — both bump Version on the worker.
+            if (p.MeshBuiltFromVersion != primal.Version)
             {
                 if (p.Mesh != null) UnityEngine.Object.Destroy(p.Mesh);
                 p.Mesh = BuildMesh(primal.Dual);
                 p.Mf.sharedMesh = p.Mesh;
                 if (p.Mc != null) p.Mc.sharedMesh = p.Mesh; // collider needs to re-cook
                 p.MeshBuiltFromVersion = primal.Version;
-                p.DualRef = primal.Dual;
             }
 
-            // (d) Toggle the MeshRenderer.
             if (wantRender && p.Mr == null)
             {
                 p.Mr = p.Go.AddComponent<MeshRenderer>();
@@ -160,7 +144,6 @@ namespace TerrainGrid
                 p.Mr = null;
             }
 
-            // (e) Toggle the MeshCollider.
             if (wantCollider && p.Mc == null)
             {
                 p.Mc = p.Go.AddComponent<MeshCollider>();
@@ -193,8 +176,6 @@ namespace TerrainGrid
             colliderRequests.Clear();
         }
 
-        // --- helpers ---
-
         PrimalChunk LookupPrimal(ChunkCoord coord)
         {
             for (int i = 0; i < primalSources.Count; i++)
@@ -210,39 +191,6 @@ namespace TerrainGrid
             HashSet<ChunkCoord> result = new HashSet<ChunkCoord>();
             foreach (HashSet<ChunkCoord> set in requests.Values) result.UnionWith(set);
             return result;
-        }
-
-        // Gather, from the chunk's 6 loaded neighbours (any primal source), the faces
-        // incident to each shared border vertex (for cell completion) and the lowest
-        // neighbour coord per border position (for deterministic ownership — the chunk
-        // with the smallest coord among contributors owns the cell, independent of which
-        // chunks are presented). Keyed by PolygonGridGenerator.LatticeKey.
-        void BuildNeighborBorderMaps(ChunkCoord coord,
-            out Dictionary<(int, int), List<Polygon>> neighborFaces,
-            out Dictionary<(int, int), ChunkCoord> minNeighborCoord)
-        {
-            neighborFaces = new Dictionary<(int, int), List<Polygon>>();
-            minNeighborCoord = new Dictionary<(int, int), ChunkCoord>();
-
-            foreach (ChunkCoord n in coord.HexesInRange(1))
-            {
-                if (n == coord) continue;
-                PrimalChunk np = LookupPrimal(n);
-                if (np == null) continue;
-
-                foreach (Vertex v in np.Verts.ToArray())
-                {
-                    if (!v.IsEdge) continue;
-                    (int, int) key = PolygonGridGenerator.LatticeKey(v.Position, hexRadius);
-
-                    if (!neighborFaces.TryGetValue(key, out List<Polygon> list))
-                        neighborFaces[key] = list = new List<Polygon>();
-                    list.AddRange(v.Polygons);
-
-                    if (!minNeighborCoord.TryGetValue(key, out ChunkCoord cur) || n.CompareTo(cur) < 0)
-                        minNeighborCoord[key] = n;
-                }
-            }
         }
 
         static Mesh BuildMesh(List<Polygon> polygons)
