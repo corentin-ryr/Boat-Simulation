@@ -172,18 +172,19 @@ namespace TerrainGrid
             var loaded = new HashSet<ChunkCoord>(renderLoaded);
             loaded.UnionWith(dataUnion);
 
-            // Evict whatever no consumer needs (persists to the store).
+            // Soft-evict whatever no consumer needs: chunks slide into the in-memory cache
+            // instead of being immediately serialized. Overflow flushes to the store at the
+            // end of the pass (TrimCache). This makes camera-wobble / agent-oscillation
+            // round-trips free.
             foreach (ChunkCoord coord in model.LoadedCoords.Where(c => !loaded.Contains(c)).ToList())
-                model.UnloadChunk(coord);
+                model.SoftUnloadChunk(coord);
 
-            // Classify: restore stored chunks serially; queue the rest for parallel generation.
+            // Classify: try to reactivate (cache hit → free; store hit → deserialize). Anything
+            // that fails both is queued for parallel generation.
             var toGenerate = new List<ChunkCoord>();
             foreach (ChunkCoord coord in loaded)
-            {
-                if (model.IsLoaded(coord)) continue;
-                if (model.HasStored(coord)) model.EnsureChunk(coord);
-                else toGenerate.Add(coord);
-            }
+                if (!model.TryReactivate(coord))
+                    toGenerate.Add(coord);
 
             if (NewerPending()) return; // stale: abandon before the expensive batch
 
@@ -230,6 +231,10 @@ namespace TerrainGrid
 
                 s.Results.Enqueue(new StreamResult { Loaded = effective, Changed = changed });
             }
+
+            // Bound the in-memory eviction cache; anything above threshold is persisted to
+            // the store in FIFO order. Cheap when the cache is under threshold.
+            model.TrimCache();
         }
     }
 }

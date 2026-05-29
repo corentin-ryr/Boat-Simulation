@@ -29,6 +29,10 @@ namespace TerrainGrid
 
         [Header("Streaming")]
         public int renderRadius = 2;
+        [Tooltip("Soft eviction cache: chunks no consumer wants are kept live in memory until " +
+                 "the cache exceeds this count, then spilled (FIFO) to the persistent store. " +
+                 "A reload while still in the cache costs zero I/O.")]
+        public int chunkCacheSize = 32;
         public Transform cameraTarget;
 
         [Header("Rendering")]
@@ -44,12 +48,13 @@ namespace TerrainGrid
 
         TerrainStreamer streamer;       // owns the authoritative model on a worker thread
         TerrainModel renderModel;       // main-thread mirror the renderer reads from
-        ChunkRenderer chunkRenderer;
+        ChunkSurface surface;           // owns per-chunk GameObjects (renderer + collider)
         ChunkConsumer renderConsumer;   // this manager's request to the streamer
 
         // Shared with other systems (e.g. SimulationManager) so they can register their own
-        // consumers. Available after Start(). Null until then.
+        // streaming consumers and collider needs on the surface. Available after Start().
         public TerrainStreamer Streamer => streamer;
+        public ChunkSurface Surface => surface;
         ChunkCoord lastCameraChunk;
         HashSet<ChunkCoord> currentRenderSet; // chunks we want meshed (renderRadius around camera)
 
@@ -72,13 +77,18 @@ namespace TerrainGrid
                 nbIterBorderRelaxation = nbIterBorderRelaxation,
                 borderRelaxInteriorRings = borderRelaxInteriorRings,
                 normalizedRelaxation = normalizedRelaxation,
+                CacheThreshold = chunkCacheSize,
                 Store = new MemoryChunkStore(),
             };
 
-            // Mirror — populated with ready chunk copies on the main thread, read by the renderer.
+            // Mirror — populated with ready chunk copies on the main thread, read by the surface.
             // No store and no generation: the worker is the sole owner of those.
             renderModel = new TerrainModel { chunkGridSize = chunkGridSize, hexRadius = hexRadius };
-            chunkRenderer = new ChunkRenderer(renderModel, transform, groundMaterial);
+
+            // The surface owns the per-chunk GameObjects. We register our render mirror as a
+            // primal source; other clients (SimulationManager) add their own mirrors.
+            surface = new ChunkSurface(transform, groundMaterial, hexRadius);
+            surface.AddPrimalSource(coord => renderModel.TryGet(coord, out PrimalChunk pc) ? pc : null);
 
             // Register as a render-ready consumer: the streamer loads our requested chunks plus a
             // 1-ring halo, relaxes their seams, and publishes deep copies for us to mesh.
@@ -88,9 +98,18 @@ namespace TerrainGrid
             lastCameraChunk = WorldToChunk(cameraTarget.position);
             currentRenderSet = RenderSetAround(lastCameraChunk);
             streamer.SetDesired(renderConsumer, currentRenderSet);
+
+            // Push to the surface with a minimal halo of lower-coord neighbours, so the
+            // perimeter cells of currentRenderSet are owned by chunks we actually present
+            // (otherwise we'd see seam gaps along the render edge).
+            HashSet<ChunkCoord> presented = ChunkCoord.MinimalHalo(currentRenderSet);
+            surface.SetRenderRequest(this, presented);
+            surface.SetColliderRequest(this, presented);
+
             // Block once so the opening view isn't empty, then go fully async.
             streamer.Prime();
             DrainResults();
+            surface.Apply(); // build the opening meshes immediately so frame 1 isn't blank
             streamer.Start();
         }
 
@@ -102,16 +121,30 @@ namespace TerrainGrid
                 lastCameraChunk = current;
                 currentRenderSet = RenderSetAround(current);
                 streamer.SetDesired(renderConsumer, currentRenderSet);
+
+                // The render set is also the collider set (visible terrain must be physical).
+                // Both go to the surface expanded by the minimal halo of lower-coord neighbours
+                // — they own the perimeter cells under deterministic dual ownership.
+                HashSet<ChunkCoord> presented = ChunkCoord.MinimalHalo(currentRenderSet);
+                surface.SetRenderRequest(this, presented);
+                surface.SetColliderRequest(this, presented);
             }
 
             DrainResults();
         }
 
-        // Apply every published pass that arrived since last frame to the mirror model, then
-        // refresh the render layer once against the current render set.
+        // The surface reconciles in LateUpdate so it picks up request changes from any other
+        // MonoBehaviour (e.g. SimulationManager) that ran earlier or later in the same frame.
+        void LateUpdate()
+        {
+            surface?.Apply();
+        }
+
+        // Apply every published pass that arrived since last frame to the mirror model.
+        // The surface is reconciled separately in LateUpdate (no need to call it here — a
+        // newly-installed chunk will be picked up on the next Apply, ~one frame later).
         void DrainResults()
         {
-            bool applied = false;
             while (streamer.TryDrainResult(renderConsumer, out StreamResult result))
             {
                 if (result.Error != null) { Debug.LogException(result.Error); continue; }
@@ -121,12 +154,7 @@ namespace TerrainGrid
 
                 foreach (ChunkCoord coord in renderModel.LoadedCoords.Where(c => !result.Loaded.Contains(c)).ToList())
                     renderModel.Evict(coord);
-
-                applied = true;
             }
-
-            if (applied)
-                chunkRenderer.SyncTo(currentRenderSet);
         }
 
         void OnDestroy() => streamer?.Stop();
@@ -152,10 +180,10 @@ namespace TerrainGrid
                 }
             }
 
-            if (showDualGizmos && chunkRenderer != null)
+            if (showDualGizmos && surface != null)
             {
                 Gizmos.color = dualGizmoColor;
-                foreach (List<Polygon> dual in chunkRenderer.DualPolygons)
+                foreach (List<Polygon> dual in surface.DualPolygons)
                     foreach (Polygon p in dual) DrawPolygon(p);
             }
         }

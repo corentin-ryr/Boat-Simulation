@@ -13,6 +13,14 @@ namespace TerrainGrid
         // so the render layer can detect a stale mesh and rebuild only when needed.
         public int Version;
 
+        // Cached dual: this chunk's owned cells (under deterministic "lowest ChunkCoord
+        // wins" ownership), lazily built by ChunkSurface and reused across presentations.
+        // Fresh chunks have null Dual; the surface builds it on first need. Invalidated when
+        // this chunk's version changes, or when a neighbour's version changes (the cascade
+        // is performed in TerrainModel.Install — neighbours' Dual is set to null).
+        public List<Polygon> Dual;
+        public int DualBuiltFromVersion = -1;
+
         public PrimalChunk(ChunkCoord coord, List<Polygon> polygons, VertexCollection verts)
         {
             Coord = coord;

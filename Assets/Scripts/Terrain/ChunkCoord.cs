@@ -60,6 +60,22 @@ namespace TerrainGrid
             }
         }
 
+        // Returns `set` plus every lower-coord neighbour of every chunk in `set`. This is the
+        // minimal halo needed for seamless presentation under deterministic dual ownership:
+        // a presented chunk's perimeter cells along a seam are built by whichever chunk has
+        // the smaller coord, so we must also present any out-of-set neighbour that would own
+        // such cells. Statistically about half of the full 1-ring halo.
+        public static HashSet<ChunkCoord> MinimalHalo(IEnumerable<ChunkCoord> set)
+        {
+            HashSet<ChunkCoord> src = set as HashSet<ChunkCoord> ?? new HashSet<ChunkCoord>(set);
+            HashSet<ChunkCoord> result = new HashSet<ChunkCoord>(src);
+            foreach (ChunkCoord p in src)
+                foreach (ChunkCoord n in p.HexesInRange(1))
+                    if (n != p && n.CompareTo(p) < 0 && !src.Contains(n))
+                        result.Add(n);
+            return result;
+        }
+
         // Lexicographic order on (q, r). Used to pick a single deterministic owner for a
         // dual cell shared by several chunks at a seam, so it is rendered exactly once.
         public int CompareTo(ChunkCoord other) => q != other.q ? q.CompareTo(other.q) : r.CompareTo(other.r);
