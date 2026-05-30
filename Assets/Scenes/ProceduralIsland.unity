@@ -163,18 +163,28 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: e92ff8355abbe41f88d80b7b25edb566, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::TerrainGrid.ChunkManager
-  chunkGridSize: 5
-  hexRadius: 1
+  chunkGridSize: 7
+  hexRadius: 10
   nbIterRelaxation: 10
   nbIterBorderRelaxation: 10
   borderRelaxInteriorRings: 1
   normalizedRelaxation: 0
   seed: 0
-  renderRadius: 2
-  chunkCacheSize: 32
+  renderRadius: 5
+  chunkCacheSize: 256
+  presenceCacheSize: 64
   cameraTarget: {fileID: 365901927}
-  groundMaterial: {fileID: 2100000, guid: add612cfd0b428a49ac1fed73a33d3d1, type: 2}
-  showPrimalGizmos: 1
+  groundMaterial: {fileID: 2100000, guid: 35df79913566d412aa02b4075a7fcbfc, type: 2}
+  elevation:
+    octaves: 5
+    baseFrequency: 0.001
+    lacunarity: 2
+    gain: 0.5
+    threshold: 0.15
+    beachBand: 0.05
+    heightScale: 100
+    seed: 1337
+  showPrimalGizmos: 0
   primalGizmoColor: {r: 0.3, g: 0.8, b: 1, a: 1}
   edgeVertexColor: {r: 1, g: 0.3, b: 0.3, a: 1}
   edgeVertexSize: 0.04
@@ -347,18 +357,19 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::TerrainGrid.SimulationManager
   terrain: {fileID: 0}
-  focus: {fileID: 0}
   agentPrefab: {fileID: 8068247777199389282, guid: 9369b824bd4e9426094e81e784376df8,
     type: 3}
   agentCount: 30
-  simRadius: 7
   agentBuffer: 1
-  spawnBuffer: 1
   agentSpeed: 3
   retargetDistance: 1
+  wanderDistance: 8
   spawnHeight: 2
   seed: 12345
-  spawnsPerFrame: 20
+  spawnCenter: {x: 0, y: 0, z: 0}
+  spawnRadius: 100
+  spawnBuffer: 1
+  spawnsPerFrame: 5
 --- !u!4 &1007021767
 Transform:
   m_ObjectHideFlags: 0
@@ -501,6 +512,59 @@ MonoBehaviour:
   m_ShadowLayerMask: 1
   m_RenderingLayers: 1
   m_ShadowRenderingLayers: 1
+--- !u!1 &1763681920
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1763681922}
+  - component: {fileID: 1763681921}
+  m_Layer: 0
+  m_Name: TerrainStatsOverlay
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &1763681921
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1763681920}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 37d9552a1b7f94b13bd64ef0f77c9bf7, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::TerrainGrid.TerrainStatsOverlay
+  show: 1
+  showInSceneView: 1
+  sampleInterval: 0.5
+  anchor: 1
+  padding: {x: 12, y: 12}
+  backgroundAlpha: 0.5
+  fontSize: 14
+  spikeThresholdMs: 8
+  maxSpikeLogsPerSecond: 4
+--- !u!4 &1763681922
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1763681920}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: -1115.7229, y: 0.00001, z: -1703.6226}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0
@@ -509,3 +573,4 @@ SceneRoots:
   - {fileID: 1236435462}
   - {fileID: 66286118}
   - {fileID: 1007021767}
+  - {fileID: 1763681922}

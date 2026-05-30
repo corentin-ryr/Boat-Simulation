@@ -32,6 +32,10 @@ namespace TerrainGrid
 
         readonly Dictionary<ChunkCoord, PrimalChunk> chunks = new();
 
+        // Shared empty-list sentinel for flat chunks' Dual: lets the version machinery treat
+        // them as "dual built (zero polygons)" without allocating a fresh list per chunk.
+        static readonly List<Polygon> noPolygons = new List<Polygon>();
+
         // Soft-eviction tier: chunks that no consumer wants right now but are kept in memory
         // so the next pass can promote them back with no I/O. Promotion happens via
         // TryReactivate; overflow flushes to Store via TrimCache. cacheOrder is FIFO and may
@@ -106,16 +110,59 @@ namespace TerrainGrid
         }
 
         // Generate a chunk's primal grid (interior relaxed, borders pinned at deterministic
-        // lattice positions).
+        // lattice positions), then bake in the elevation field on every vertex and derive the
+        // per-cell terrain classification + chunk-level IsFlat flag from the resulting heights.
         PrimalChunk Generate(ChunkCoord coord)
         {
+            using var _ = TerrainProfiler.Measure(TerrainProfiler.Phase.GenerateChunk);
+
             int chunkSeed = seed ^ (coord.q * 73856093) ^ (coord.r * 19349663);
             var random = new System.Random(chunkSeed);
 
-            var (polygons, verts) = PolygonGridGenerator.GeneratePrimal(
-                chunkGridSize, hexRadius, random, ChunkToWorld(coord), nbIterRelaxation, normalizedRelaxation);
+            List<Polygon> polygons;
+            VertexCollection verts;
+            using (TerrainProfiler.Measure(TerrainProfiler.Phase.GenPrimal))
+                (polygons, verts) = PolygonGridGenerator.GeneratePrimal(
+                    chunkGridSize, hexRadius, random, ChunkToWorld(coord), nbIterRelaxation, normalizedRelaxation);
 
-            return new PrimalChunk(coord, polygons, verts);
+            // 1) Bake elevation. Vertex positions are still at Y=0 at this point — sampling
+            //    here makes the primal a true 3D mesh ready for both rendering and gameplay.
+            //    Border relax (in RelaxBorders) preserves Y, so this is the only place where Y
+            //    is set on a fresh chunk.
+            bool isFlat = true;
+            using (TerrainProfiler.Measure(TerrainProfiler.Phase.GenElevation))
+            {
+                foreach (Vertex v in verts.ToArray())
+                {
+                    float h = Elevation.Sample(v.Position.x, v.Position.z);
+                    if (h != 0f)
+                    {
+                        v.SetHeight(h);
+                        isFlat = false;
+                    }
+                }
+            }
+
+            // 2) Classify cells from their vertex heights. Cheap O(verts/cell) per polygon.
+            using (TerrainProfiler.Measure(TerrainProfiler.Phase.GenClassify))
+            {
+                foreach (Polygon p in polygons)
+                {
+                    bool anyLand = false, anyOcean = false;
+                    foreach (Vertex v in p.GetVertices())
+                    {
+                        if (v.Position.y > 0f) anyLand = true;
+                        else anyOcean = true;
+                        if (anyLand && anyOcean) break;
+                    }
+                    p.Terrain = anyLand
+                        ? (anyOcean ? CellTerrain.Coastal : CellTerrain.Land)
+                        : CellTerrain.Ocean;
+                }
+            }
+
+            TerrainProfiler.IncChunksGenerated();
+            return new PrimalChunk(coord, polygons, verts) { IsFlat = isFlat };
         }
 
         // Free a chunk from active memory, first saving its (relaxed) state so a later reload
@@ -174,10 +221,12 @@ namespace TerrainGrid
         // is stale to be (re)built — in parallel. The dual is then carried along with the
         // primal in the deep-copy to consumers.
 
-        // Worker-side check: does this chunk need its dual (re)built?
+        // Worker-side check: does this chunk need its dual (re)built? Flat chunks never need
+        // one — the surface mounts a shared flat-ocean tile instead of meshing their polygons.
         public bool NeedsDual(ChunkCoord coord)
         {
             return chunks.TryGetValue(coord, out PrimalChunk c)
+                && !c.IsFlat
                 && (c.Dual == null || c.DualBuiltFromVersion != c.Version);
         }
 
@@ -186,37 +235,69 @@ namespace TerrainGrid
         // ownership). Safe to call in parallel for different coords: reads model.chunks
         // (no concurrent mutation at this point of the pass) and writes only chunk.Dual
         // on the specific coord.
+        //
+        // Flat chunks short-circuit: we set Dual to a non-null empty sentinel so the
+        // version/publish machinery treats their dual as "built" (zero polygons), and the
+        // surface uses the IsFlat flag to mount a shared flat tile.
         public void BuildDual(ChunkCoord coord)
         {
+            using var _ = TerrainProfiler.Measure(TerrainProfiler.Phase.BuildDual);
+
             if (!chunks.TryGetValue(coord, out PrimalChunk chunk)) return;
+            if (chunk.IsFlat)
+            {
+                chunk.Dual = noPolygons;
+                chunk.DualBuiltFromVersion = chunk.Version;
+                TerrainProfiler.IncDualsBuilt();
+                return;
+            }
             if (chunk.Dual != null && chunk.DualBuiltFromVersion == chunk.Version) return;
 
-            Dictionary<(int, int), List<Polygon>> neighborFaces = new();
-            Dictionary<(int, int), ChunkCoord> minNeighborCoord = new();
+            Dictionary<(int, int), List<Polygon>> neighborFaces;
+            Dictionary<(int, int), ChunkCoord> minNeighborCoord;
 
-            foreach (ChunkCoord n in coord.HexesInRange(1))
+            using (TerrainProfiler.Measure(TerrainProfiler.Phase.BuildDualGather))
             {
-                if (n == coord) continue;
-                if (!chunks.TryGetValue(n, out PrimalChunk np)) continue;
+                neighborFaces = new Dictionary<(int, int), List<Polygon>>();
+                minNeighborCoord = new Dictionary<(int, int), ChunkCoord>();
 
-                foreach (Vertex v in np.Verts.ToArray())
+                foreach (ChunkCoord n in coord.HexesInRange(1))
                 {
-                    if (!v.IsEdge) continue;
-                    (int, int) key = PolygonGridGenerator.LatticeKey(v.Position, hexRadius);
+                    if (n == coord) continue;
+                    if (!chunks.TryGetValue(n, out PrimalChunk np)) continue;
 
-                    if (!neighborFaces.TryGetValue(key, out List<Polygon> list))
-                        neighborFaces[key] = list = new List<Polygon>();
-                    list.AddRange(v.Polygons);
+                    // Flat chunks never build their dual (they use a shared flat tile at present
+                    // time), so they must not enter the ownership race — otherwise a seam cell
+                    // whose lowest-coord chunk is flat would be orphaned (skipped by everyone).
+                    // Their primal faces *are* still useful for completing coastal cells on the
+                    // non-flat side: a flat neighbour's polygon centers sit at Y=0, which gives
+                    // the correct sea-level vertex on a beach dual cell.
+                    bool npBuildsDual = !np.IsFlat;
 
-                    if (!minNeighborCoord.TryGetValue(key, out ChunkCoord cur) || n.CompareTo(cur) < 0)
-                        minNeighborCoord[key] = n;
+                    foreach (Vertex v in np.Verts.Values)
+                    {
+                        if (!v.IsEdge) continue;
+                        (int, int) key = PolygonGridGenerator.LatticeKey(v.Position, hexRadius);
+
+                        if (!neighborFaces.TryGetValue(key, out List<Polygon> list))
+                            neighborFaces[key] = list = new List<Polygon>();
+                        foreach (Polygon p in v.Polygons) list.Add(p);
+
+                        if (npBuildsDual
+                            && (!minNeighborCoord.TryGetValue(key, out ChunkCoord cur) || n.CompareTo(cur) < 0))
+                            minNeighborCoord[key] = n;
+                    }
                 }
             }
 
-            var (dualPolygons, _) = PolygonGridGenerator.GenerateDual(
-                chunk, hexRadius, neighborFaces, minNeighborCoord);
-            chunk.Dual = dualPolygons.ToList();
-            chunk.DualBuiltFromVersion = chunk.Version;
+            using (TerrainProfiler.Measure(TerrainProfiler.Phase.BuildDualGenerate))
+            {
+                var (dualPolygons, _) = PolygonGridGenerator.GenerateDual(
+                    chunk, hexRadius, neighborFaces, minNeighborCoord);
+                chunk.Dual = dualPolygons;        // GenerateDual now returns List directly — no ToList needed.
+                chunk.DualBuiltFromVersion = chunk.Version;
+            }
+            TerrainProfiler.IncDualsBuilt();
         }
 
         // Invalidate the cached dual on every loaded-or-cached neighbour of `coord`. The
@@ -250,6 +331,8 @@ namespace TerrainGrid
         public void RelaxBorders(IReadOnlyCollection<ChunkCoord> active)
         {
             if (active == null || active.Count == 0) return;
+            using var _ = TerrainProfiler.Measure(TerrainProfiler.Phase.RelaxBorders);
+            TerrainProfiler.IncRelaxPasses();
 
             var coords = new List<ChunkCoord>(active.Count);
             var collections = new List<VertexCollection>(active.Count);

@@ -12,9 +12,11 @@ namespace TerrainGrid
     // and trivially serializable to disk later.
     public class ChunkSnapshot
     {
-        public Vector3[] VertexPositions;
+        public Vector3[] VertexPositions;       // includes Y from the elevation field
         public bool[] VertexIsEdge;
-        public int[][] PolygonVertices; // each polygon as indices into the vertex arrays
+        public int[][] PolygonVertices;         // each polygon as indices into the vertex arrays
+        public CellTerrain[] PolygonTerrain;    // per-polygon classification (Ocean/Coastal/Land)
+        public bool IsFlat;                     // chunk-level flat-ocean fast-path flag
         public int Version;
 
         public static ChunkSnapshot Capture(PrimalChunk chunk)
@@ -37,6 +39,8 @@ namespace TerrainGrid
                 VertexPositions = new Vector3[indexed.Count],
                 VertexIsEdge = new bool[indexed.Count],
                 PolygonVertices = new int[chunk.Polygons.Count][],
+                PolygonTerrain = new CellTerrain[chunk.Polygons.Count],
+                IsFlat = chunk.IsFlat,
                 Version = chunk.Version,
             };
 
@@ -48,10 +52,12 @@ namespace TerrainGrid
 
             for (int pi = 0; pi < chunk.Polygons.Count; pi++)
             {
-                Vertex[] pv = chunk.Polygons[pi].GetVertices();
+                Polygon poly = chunk.Polygons[pi];
+                Vertex[] pv = poly.GetVertices();
                 int[] ids = new int[pv.Length];
                 for (int k = 0; k < pv.Length; k++) ids[k] = index[pv[k]];
                 snap.PolygonVertices[pi] = ids;
+                snap.PolygonTerrain[pi] = poly.Terrain;
             }
 
             return snap;
@@ -69,14 +75,25 @@ namespace TerrainGrid
             }
 
             List<Polygon> polygons = new List<Polygon>(snap.PolygonVertices.Length);
-            foreach (int[] ids in snap.PolygonVertices)
+            for (int pi = 0; pi < snap.PolygonVertices.Length; pi++)
             {
+                int[] ids = snap.PolygonVertices[pi];
                 Vertex[] pv = new Vertex[ids.Length];
                 for (int k = 0; k < ids.Length; k++) pv[k] = verts[ids[k]];
-                polygons.Add(new Polygon(pv)); // ctor re-links vertex -> polygon associations
+                Polygon poly = new Polygon(pv); // ctor re-links vertex -> polygon associations
+                // Older snapshots predating the elevation system have no Terrain array; default
+                // to Ocean (consistent with the pre-elevation flat-Y=0 state).
+                poly.Terrain = snap.PolygonTerrain != null && pi < snap.PolygonTerrain.Length
+                    ? snap.PolygonTerrain[pi]
+                    : CellTerrain.Ocean;
+                polygons.Add(poly);
             }
 
-            return new PrimalChunk(coord, polygons, vc) { Version = snap.Version };
+            return new PrimalChunk(coord, polygons, vc)
+            {
+                Version = snap.Version,
+                IsFlat = snap.IsFlat,
+            };
         }
     }
 }

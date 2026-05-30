@@ -33,10 +33,21 @@ namespace TerrainGrid
                  "the cache exceeds this count, then spilled (FIFO) to the persistent store. " +
                  "A reload while still in the cache costs zero I/O.")]
         public int chunkCacheSize = 32;
+        [Tooltip("Warm-presence cache: GameObjects + Meshes + cooked MeshColliders that left the " +
+                 "wanted set are kept inactive in the scene until this many accumulate, then " +
+                 "FIFO-destroyed. A revisit while still in the cache costs zero BuildMesh / " +
+                 "ColliderCook — the major source of camera-pan hitches.")]
+        public int presenceCacheSize = 64;
         public Transform cameraTarget;
 
         [Header("Rendering")]
         public Material groundMaterial;
+
+        [Header("Elevation")]
+        [Tooltip("Tuning knobs for the pointwise terrain height field. Assigned to the static " +
+                 "Elevation.Config at Start so worker threads (chunk gen, dual build) and main-" +
+                 "thread queries (NPC ground snap) share the same parameters.")]
+        public ElevationConfig elevation = new ElevationConfig();
 
         [Header("Debug")]
         public bool showPrimalGizmos = false;
@@ -67,6 +78,11 @@ namespace TerrainGrid
         {
             if (cameraTarget == null) cameraTarget = Camera.main?.transform;
 
+            // Publish the elevation config before any chunk is generated. Elevation.Sample is
+            // pure and reads Config without locking; setting it here once means worker threads
+            // see a stable snapshot for the lifetime of the scene.
+            Elevation.Config = elevation;
+
             // Authoritative model — lives behind the streamer, mutated only on the worker.
             TerrainModel model = new TerrainModel
             {
@@ -87,7 +103,7 @@ namespace TerrainGrid
 
             // The surface owns the per-chunk GameObjects. We register our render mirror as a
             // primal source; other clients (SimulationManager) add their own mirrors.
-            surface = new ChunkSurface(transform, groundMaterial, hexRadius);
+            surface = new ChunkSurface(transform, groundMaterial, hexRadius, chunkGridSize, presenceCacheSize);
             surface.AddPrimalSource(coord => renderModel.TryGet(coord, out PrimalChunk pc) ? pc : null);
 
             // Register as a render-ready consumer: the streamer loads our requested chunks plus a
@@ -145,12 +161,14 @@ namespace TerrainGrid
         // newly-installed chunk will be picked up on the next Apply, ~one frame later).
         void DrainResults()
         {
+            using var _ = TerrainProfiler.Measure(TerrainProfiler.Phase.DrainResults);
             while (streamer.TryDrainResult(renderConsumer, out StreamResult result))
             {
                 if (result.Error != null) { Debug.LogException(result.Error); continue; }
 
-                foreach (PrimalChunk pc in result.Changed)
-                    renderModel.Install(pc);
+                using (TerrainProfiler.Measure(TerrainProfiler.Phase.InstallChunk))
+                    foreach (PrimalChunk pc in result.Changed)
+                        renderModel.Install(pc);
 
                 foreach (ChunkCoord coord in renderModel.LoadedCoords.Where(c => !result.Loaded.Contains(c)).ToList())
                     renderModel.Evict(coord);

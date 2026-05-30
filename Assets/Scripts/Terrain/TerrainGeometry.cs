@@ -4,10 +4,27 @@ using UnityEngine;
 
 namespace TerrainGrid
 {
+    // Coarse semantic classification of a primal cell, derived once at generation from the
+    // elevation field. Lets gameplay code (NPCs, building placement, biome triggers) reason
+    // about cells without re-sampling the noise field. Mirrors round-trip through ChunkSnapshot.
+    //   Ocean   — every corner of the cell is at Y=0 (under the elevation threshold)
+    //   Coastal — at least one corner at Y=0 and at least one above
+    //   Land    — every corner above Y=0
+    public enum CellTerrain : byte
+    {
+        Ocean = 0,
+        Coastal = 1,
+        Land = 2,
+    }
+
     public class Polygon
     {
         Vertex[] vertices;
         Polygon[] neighbors;
+
+        // Semantic class set by TerrainModel after vertex elevations are sampled. Default Ocean
+        // is the correct value for a freshly-built flat (Y=0) chunk; classification overrides it.
+        public CellTerrain Terrain = CellTerrain.Ocean;
 
         public Polygon(Vertex[] _vertices)
         {
@@ -176,6 +193,11 @@ namespace TerrainGrid
 
         public int Count { get => vertices.Count; }
         public Vertex[] ToArray() => vertices.Values.ToArray();
+
+        // Allocation-free iteration over the contained vertices. Prefer this to ToArray()
+        // anywhere the call site only enumerates and never indexes — saves the per-call
+        // array allocation, which matters on the worker thread's BuildDual/DeepCopy loops.
+        public Dictionary<Vector3, Vertex>.ValueCollection Values => vertices.Values;
         public float GetMapSize() => Mathf.Max(maxX - minX, maxY - minY);
     }
 }

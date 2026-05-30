@@ -150,6 +150,7 @@ namespace TerrainGrid
 
         void RunPass()
         {
+            using var _ = TerrainProfiler.Measure(TerrainProfiler.Phase.RunPass);
             // Snapshot consumer requests under the lock; do all heavy work outside it.
             List<ConsumerState> snap;
             List<HashSet<ChunkCoord>> desiredSnap;
@@ -260,6 +261,10 @@ namespace TerrainGrid
             // Bound the in-memory eviction cache; anything above threshold is persisted to
             // the store in FIFO order. Cheap when the cache is under threshold.
             model.TrimCache();
+
+            // Surface live counts to the stats overlay.
+            TerrainProfiler.LoadedChunks = model.LoadedCount;
+            TerrainProfiler.CachedChunks = model.CachedCount;
         }
     }
 }

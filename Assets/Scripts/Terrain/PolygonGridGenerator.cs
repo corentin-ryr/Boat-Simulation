@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
@@ -49,17 +50,37 @@ namespace TerrainGrid
         //    them (lowest ChunkCoord), so seam cells render once with no overlap.
         // `neighborFaces` and `minNeighborCoord` are keyed by LatticeKey(position); the latter
         // holds the lowest coord among the *neighbour* chunks sharing each border position.
-        public static (HashSet<Polygon>, VertexCollection) GenerateDual(
+        //
+        // Allocation-frugal: walks VertexCollection.Values directly, reuses a pair of stack
+        // buffers across all vertices (only resized on the rare wide ring), and does the
+        // by-angle sort in place via insertion sort. We deliberately do NOT call
+        // ComputeNeighbors on the resulting dual polygons — they're consumed by mesh build
+        // (no neighbour access) and discarded by DeepCopy (which drops them anyway), so the
+        // edge-pairing pass would be pure waste.
+        public static (List<Polygon>, VertexCollection) GenerateDual(
             PrimalChunk chunk, float hexRadius,
             Dictionary<(int, int), List<Polygon>> neighborFaces,
             Dictionary<(int, int), ChunkCoord> minNeighborCoord)
         {
-            HashSet<Polygon> dualPolygons = new HashSet<Polygon>();
+            // Dual polygon count is bounded above by primal vertex count.
+            List<Polygon> dualPolygons = new List<Polygon>(chunk.Verts.Count);
             VertexCollection dualVertices = new VertexCollection();
 
-            foreach (Vertex vertex in chunk.Verts.ToArray())
+            // Reusable buffers. Typical dual cell has 3-7 faces; 16 covers the wide ring
+            // around a 3-chunk corner with comfortable headroom.
+            Polygon[] facesBuf = new Polygon[16];
+            Vertex[]  vertsBuf = new Vertex[16];
+            float[]   anglesBuf = new float[16];
+
+            foreach (Vertex vertex in chunk.Verts.Values)
             {
-                List<Polygon> faces = new List<Polygon>(vertex.Polygons);
+                // Gather incident faces into the local buffer (no per-vertex List allocation).
+                int faceCount = 0;
+                foreach (Polygon p in vertex.Polygons)
+                {
+                    if (faceCount >= facesBuf.Length) Array.Resize(ref facesBuf, facesBuf.Length * 2);
+                    facesBuf[faceCount++] = p;
+                }
 
                 if (vertex.IsEdge)
                 {
@@ -73,22 +94,58 @@ namespace TerrainGrid
 
                     // Completion: add the neighbour faces so the ring closes across the seam.
                     if (neighborFaces != null && neighborFaces.TryGetValue(key, out List<Polygon> extra))
-                        faces.AddRange(extra);
+                    {
+                        for (int i = 0, n = extra.Count; i < n; i++)
+                        {
+                            if (faceCount >= facesBuf.Length) Array.Resize(ref facesBuf, facesBuf.Length * 2);
+                            facesBuf[faceCount++] = extra[i];
+                        }
+                    }
                 }
 
-                if (faces.Count < 3) continue; // exposed/degenerate — drop instead of spiking
+                if (faceCount < 3) continue; // exposed/degenerate — drop instead of spiking
 
-                List<Vertex> newVerts = faces
-                    .Select(p => dualVertices.AddOrCreate(p.GetCenter()))
-                    .OrderBy(x => Vector3.SignedAngle(x.Position - vertex.Position, Vector3.forward, Vector3.up))
-                    .ToList();
+                if (faceCount > vertsBuf.Length)
+                {
+                    Array.Resize(ref vertsBuf, faceCount);
+                    Array.Resize(ref anglesBuf, faceCount);
+                }
 
-                if (newVerts.Count < 3) continue;
+                // Materialize dual vertices (face centers) and their sort key (angle from
+                // this primal vertex around the up axis) in one pass.
+                Vector3 vp = vertex.Position;
+                for (int i = 0; i < faceCount; i++)
+                {
+                    Vertex dv = dualVertices.AddOrCreate(facesBuf[i].GetCenter());
+                    vertsBuf[i] = dv;
+                    anglesBuf[i] = Vector3.SignedAngle(dv.Position - vp, Vector3.forward, Vector3.up);
+                }
 
-                dualPolygons.Add(new Polygon(newVerts.ToArray()));
+                // Insertion sort by angle — faceCount is small (3-8 normally, up to ~12
+                // around a 3-chunk corner) so the simpler algorithm beats a comparator-based
+                // Array.Sort that would allocate a delegate per call.
+                for (int i = 1; i < faceCount; i++)
+                {
+                    float a = anglesBuf[i];
+                    Vertex v = vertsBuf[i];
+                    int j = i - 1;
+                    while (j >= 0 && anglesBuf[j] > a)
+                    {
+                        anglesBuf[j + 1] = anglesBuf[j];
+                        vertsBuf[j + 1] = vertsBuf[j];
+                        j--;
+                    }
+                    anglesBuf[j + 1] = a;
+                    vertsBuf[j + 1] = v;
+                }
+
+                // Polygon takes ownership of the vertex array, so we must allocate a
+                // right-sized copy rather than handing it the shared buffer.
+                Vertex[] polyVerts = new Vertex[faceCount];
+                Array.Copy(vertsBuf, polyVerts, faceCount);
+                dualPolygons.Add(new Polygon(polyVerts));
             }
 
-            ComputeNeighbors(dualPolygons.ToList());
             return (dualPolygons, dualVertices);
         }
 
@@ -204,6 +261,12 @@ namespace TerrainGrid
 
         // Rotational (square-fitting) relaxation goal contributed to vertex v by every quad
         // incident to it — the same formula as GridRelaxation, summed for a single vertex.
+        //
+        // Returns XZ-only: relaxation reshapes the planar layout of the grid, while Y carries
+        // elevation sampled from the noise field. The rotations are around Vector3.up so they
+        // preserve Y on each rotated component, but the SUM still inherits Y from the input
+        // vertex positions; zeroing it here keeps relaxation conceptually 2D and elevation
+        // untouched by seam welding.
         private static Vector3 VertexGoalMovement(Vertex v)
         {
             Vector3 sum = Vector3.zero;
@@ -222,6 +285,7 @@ namespace TerrainGrid
                 Vector3 target = c + Quaternion.AngleAxis(-90f * i, Vector3.up) * goal;
                 sum += target - v.Position;
             }
+            sum.y = 0f;
             return sum;
         }
 

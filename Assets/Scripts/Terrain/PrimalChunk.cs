@@ -24,6 +24,19 @@ namespace TerrainGrid
         public List<Polygon> Dual;
         public int DualBuiltFromVersion = -1;
 
+        // True iff every one of this chunk's 6 neighbour coords was loaded when this Dual
+        // was built. When true, the dual already accounts for any of those neighbours that
+        // get added later (cache revive, store restore, fresh generate) — ownership and
+        // seam cells were resolved with full information — so the add-cascade can skip
+        // invalidating this chunk. Reset to false on InvalidateDual; recomputed in BuildDual.
+        public bool DualComplete;
+
+        // True iff every primal vertex in this chunk sits at Y=0 — i.e. every noise sample
+        // came back at or below the elevation threshold. Set once at generation. When true the
+        // streamer skips dual computation entirely and the surface mounts a shared flat-ocean
+        // tile instead of building a per-cell mesh — the dominant optimization for open ocean.
+        public bool IsFlat;
+
         public PrimalChunk(ChunkCoord coord, List<Polygon> polygons, VertexCollection verts)
         {
             Coord = coord;
@@ -39,29 +52,31 @@ namespace TerrainGrid
         // primitive arrays. Safe to call off the main thread (pure object construction).
         public PrimalChunk DeepCopy()
         {
-            Dictionary<Vertex, Vertex> map = new Dictionary<Vertex, Vertex>();
+            using var _ = TerrainProfiler.Measure(TerrainProfiler.Phase.DeepCopy);
+            TerrainProfiler.IncDeepCopies();
+
+            // Pre-size the lookup map and vertex collection so they never rehash. Iterate
+            // Verts.Values directly (allocation-free) instead of Verts.ToArray().
+            int vCount = Verts.Count;
+            Dictionary<Vertex, Vertex> map = new Dictionary<Vertex, Vertex>(vCount);
             VertexCollection vc = new VertexCollection();
 
-            Vertex Map(Vertex v)
+            foreach (Vertex v in Verts.Values)
             {
-                if (!map.TryGetValue(v, out Vertex nv))
-                {
-                    nv = new Vertex(v.Position, v.IsEdge);
-                    map[v] = nv;
-                    vc.AddVertex(nv);
-                }
-                return nv;
+                Vertex nv = new Vertex(v.Position, v.IsEdge);
+                map[v] = nv;
+                vc.AddVertex(nv);
             }
-
-            foreach (Vertex v in Verts.ToArray()) Map(v);
 
             List<Polygon> polys = new List<Polygon>(Polygons.Count);
             foreach (Polygon p in Polygons)
             {
                 Vertex[] src = p.GetVertices();
                 Vertex[] dst = new Vertex[src.Length];
-                for (int i = 0; i < src.Length; i++) dst[i] = Map(src[i]);
-                polys.Add(new Polygon(dst)); // ctor re-links vertex -> polygon associations
+                for (int i = 0; i < src.Length; i++) dst[i] = map[src[i]]; // direct, all keys present
+                Polygon np = new Polygon(dst); // ctor re-links vertex -> polygon associations
+                np.Terrain = p.Terrain;        // carry the per-cell classification across the copy
+                polys.Add(np);
             }
 
             // Copy the cached dual too. Dual polygons own their own Vertex objects (no
@@ -70,12 +85,15 @@ namespace TerrainGrid
             List<Polygon> dualCopy = null;
             if (Dual != null)
             {
-                dualCopy = new List<Polygon>(Dual.Count);
-                foreach (Polygon p in Dual)
+                int dCount = Dual.Count;
+                dualCopy = new List<Polygon>(dCount);
+                for (int pi = 0; pi < dCount; pi++)
                 {
+                    Polygon p = Dual[pi];
                     Vertex[] src = p.GetVertices();
-                    Vertex[] dst = new Vertex[src.Length];
-                    for (int i = 0; i < src.Length; i++)
+                    int n = src.Length;
+                    Vertex[] dst = new Vertex[n];
+                    for (int i = 0; i < n; i++)
                         dst[i] = new Vertex(src[i].Position, src[i].IsEdge);
                     dualCopy.Add(new Polygon(dst));
                 }
@@ -86,6 +104,7 @@ namespace TerrainGrid
                 Version = Version,
                 Dual = dualCopy,
                 DualBuiltFromVersion = DualBuiltFromVersion,
+                IsFlat = IsFlat,
             };
         }
     }
