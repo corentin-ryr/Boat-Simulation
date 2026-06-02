@@ -1,5 +1,12 @@
 {
   "dependencies": {
+    "com.gasgiant.markupattributes": {
+      "version": "https://github.com/gasgiant/Markup-Attributes.git#upm",
+      "depth": 0,
+      "source": "git",
+      "dependencies": {},
+      "hash": "0cc6036815eadab678a378cbee731c47357907cb"
+    },
     "com.unity.ai.navigation": {
       "version": "2.0.12",
       "depth": 0,

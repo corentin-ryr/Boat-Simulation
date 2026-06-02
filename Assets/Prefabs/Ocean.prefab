@@ -1,0 +1,87 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &8924439374444319798
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 5446549964819347197}
+  - component: {fileID: 3802832228161113993}
+  - component: {fileID: 1755329742700756017}
+  - component: {fileID: 9182746358291046274}
+  m_Layer: 4
+  m_Name: Ocean
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &5446549964819347197
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 8924439374444319798}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &3802832228161113993
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 8924439374444319798}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 69112c270b4b834429cb51724e4a421f, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  _material: {fileID: 2100000, guid: 10252c97548dc8b47995a41628c2d275, type: 2}
+  _colorsPreset: {fileID: 11400000, guid: f6d1ab7c05fcf9449b39b334527e0700, type: 2}
+  _reflectionsMode: 0
+  _probe: {fileID: 0}
+  _cubemap: {fileID: 0}
+  _viewer: {fileID: 0}
+  _minMeshScale: 15
+  _clipMapLevels: 7
+  _vertexDensity: 25
+--- !u!114 &1755329742700756017
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 8924439374444319798}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: edf2da8994d19eb47a1ab86a4a607e65, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  _simulationSettings: {fileID: 11400000, guid: 59c5d1e11cdd336428ee3e1f68810c3f, type: 2}
+  _inputsProvider: {fileID: 11400000, guid: 60b7fe5ee6ea80e4aa9ad21d6132d821, type: 2}
+  _localWindDirection: 155
+  _swellDirection: 0
+  _windForce01: 0.6
+--- !u!114 &9182746358291046274
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 8924439374444319798}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: b6a1f3c7d92e4f6890bce7142d5a83f4, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  simulation: {fileID: 1755329742700756017}

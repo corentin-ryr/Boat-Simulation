@@ -203,8 +203,14 @@ namespace TerrainGrid
                 {
                     // Switch to flat mode: release any per-chunk mesh, position the GameObject at
                     // the chunk's world center (the shared tile is in local space around origin).
+                    // Drop the GameObject by SeabedY so the shared tile sits at the seabed level
+                    // — the dual mesh path bakes Y per-vertex via Elevation.Sample, but the
+                    // flat-tile path uses one shared mesh whose verts are pinned at local Y=0,
+                    // so the depth has to come from the transform.
                     if (p.Mesh != null) { UnityEngine.Object.Destroy(p.Mesh); p.Mesh = null; }
-                    p.Go.transform.localPosition = coord.WorldCenter(hexRadius, chunkGridSize);
+                    Vector3 flatCenter = coord.WorldCenter(hexRadius, chunkGridSize);
+                    flatCenter.y = Elevation.SeabedY;
+                    p.Go.transform.localPosition = flatCenter;
                     p.Flat = true;
                     p.MeshBuiltFromVersion = primal.Version;
                     p.Mf.sharedMesh = GetFlatTile();

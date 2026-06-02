@@ -1,3 +1,5 @@
 ﻿<Solution>
   <Project Path="Assembly-CSharp.csproj" />
+  <Project Path="gasgiant.OceanSystem.Runtime.csproj" />
+  <Project Path="gasgiant.OceanSystem.Editor.csproj" />
 </Solution>

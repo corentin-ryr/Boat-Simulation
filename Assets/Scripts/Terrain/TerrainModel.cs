@@ -43,12 +43,84 @@ namespace TerrainGrid
         readonly Dictionary<ChunkCoord, PrimalChunk> cache = new();
         readonly Queue<ChunkCoord> cacheOrder = new();
 
+        // Tile mutations targeting chunks that weren't loaded when they were enqueued. Replayed
+        // by ReplayPendingMutations the moment that coord comes live (generate / cache revive /
+        // store restore), so gameplay code never has to wait for streaming to apply a paint.
+        readonly Dictionary<ChunkCoord, List<TileMutation>> pendingMutations = new();
+
+        // Guards every read/write of `pendingMutations` and of any chunk's `TileProperties`
+        // array. Taken by ApplyTileMutation, ReplayPendingMutations, and TryGetTileProperty —
+        // the three paths that touch tile state. Held only for tight, allocation-free spans so
+        // main-thread queries never block the worker meaningfully.
+        readonly object tileLock = new object();
+
         public IEnumerable<ChunkCoord> LoadedCoords => chunks.Keys;
         public int LoadedCount => chunks.Count;
         public int CachedCount => cache.Count;
         public bool IsLoaded(ChunkCoord coord) => chunks.ContainsKey(coord);
         public bool IsCached(ChunkCoord coord) => cache.ContainsKey(coord);
         public bool TryGet(ChunkCoord coord, out PrimalChunk chunk) => chunks.TryGetValue(coord, out chunk);
+
+        // --- Tile property mutation (worker-thread) ---
+        // All writes go through ApplyTileMutation; main thread calls in via TerrainStreamer.
+        // If the target chunk is loaded, write straight to its lazy-allocated parallel array
+        // and bump Version (existing publish loop catches the change). If it's not loaded,
+        // park the mutation in pendingMutations so the next promotion (generate/revive/restore)
+        // applies it via ReplayPendingMutations before any consumer sees the chunk.
+
+        public void ApplyTileMutation(ChunkCoord coord, int polygonIndex, TileProperty value)
+        {
+            lock (tileLock)
+            {
+                if (chunks.TryGetValue(coord, out PrimalChunk chunk))
+                {
+                    if (polygonIndex < 0 || polygonIndex >= chunk.Polygons.Count) return;
+                    if (chunk.TileProperties == null)
+                        chunk.TileProperties = new TileProperty[chunk.Polygons.Count];
+                    chunk.TileProperties[polygonIndex] = value;
+                    chunk.Version++;
+                    return;
+                }
+
+                if (!pendingMutations.TryGetValue(coord, out List<TileMutation> list))
+                    pendingMutations[coord] = list = new List<TileMutation>();
+                list.Add(new TileMutation { Coord = coord, PolygonIndex = polygonIndex, Value = value });
+            }
+        }
+
+        public bool TryGetTileProperty(ChunkCoord coord, int polygonIndex, out TileProperty value)
+        {
+            lock (tileLock)
+            {
+                value = default;
+                if (!chunks.TryGetValue(coord, out PrimalChunk chunk)) return false;
+                if (polygonIndex < 0 || polygonIndex >= chunk.Polygons.Count) return false;
+                if (chunk.TileProperties != null) value = chunk.TileProperties[polygonIndex];
+                return true;
+            }
+        }
+
+        // Replay any mutations queued against a coord before it was loaded. Called from the
+        // promotion paths (EnsureChunk / TryReactivate / AddChunk) right after the chunk lands
+        // in `chunks`, so consumers never observe the chunk in an "almost painted" state.
+        void ReplayPendingMutations(ChunkCoord coord)
+        {
+            lock (tileLock)
+            {
+                if (!pendingMutations.TryGetValue(coord, out List<TileMutation> list)) return;
+                pendingMutations.Remove(coord);
+                if (!chunks.TryGetValue(coord, out PrimalChunk chunk)) return;
+                if (chunk.TileProperties == null)
+                    chunk.TileProperties = new TileProperty[chunk.Polygons.Count];
+                for (int i = 0; i < list.Count; i++)
+                {
+                    TileMutation m = list[i];
+                    if (m.PolygonIndex < 0 || m.PolygonIndex >= chunk.Polygons.Count) continue;
+                    chunk.TileProperties[m.PolygonIndex] = m.Value;
+                }
+                chunk.Version++;
+            }
+        }
 
         Vector3 ChunkToWorld(ChunkCoord coord) => coord.WorldCenter(hexRadius, chunkGridSize);
 
@@ -61,6 +133,7 @@ namespace TerrainGrid
             if (chunks.ContainsKey(coord)) return false;
             if (TryReactivate(coord)) return false;
             chunks[coord] = Generate(coord);
+            ReplayPendingMutations(coord);
             return true;
         }
 
@@ -76,13 +149,15 @@ namespace TerrainGrid
             {
                 cache.Remove(coord);
                 chunks[coord] = cached;
-                InvalidateNeighborDuals(coord);
+                InvalidateNeighborDualsOnAdd(coord);
+                ReplayPendingMutations(coord);
                 return true;
             }
             if (Store != null && Store.Has(coord))
             {
                 chunks[coord] = ChunkSnapshot.Restore(coord, Store.Load(coord));
-                InvalidateNeighborDuals(coord);
+                InvalidateNeighborDualsOnAdd(coord);
+                ReplayPendingMutations(coord);
                 return true;
             }
             return false;
@@ -100,13 +175,16 @@ namespace TerrainGrid
         // insert it — the caller adds it via AddChunk on the owning thread.
         public PrimalChunk GenerateChunk(ChunkCoord coord) => Generate(coord);
 
-        // Insert a generated chunk into the authoritative set (serial). Cascades: this chunk's
-        // 6 loaded-or-cached neighbours had their cached duals (if any) built without us — now
-        // stale. Invalidate them so the next BuildDual rebuilds with our data.
+        // Insert a generated chunk into the authoritative set (serial). Cascades to neighbours
+        // whose duals don't already account for this coord: a neighbour with DualComplete=true
+        // was built when all 6 of its neighbours were loaded — including this coord — so its
+        // dual is already correct and we skip invalidation. Only DualComplete=false neighbours
+        // (built with some coord missing) need rebuilding to incorporate us.
         public void AddChunk(PrimalChunk chunk)
         {
             chunks[chunk.Coord] = chunk;
-            InvalidateNeighborDuals(chunk.Coord);
+            InvalidateNeighborDualsOnAdd(chunk.Coord);
+            ReplayPendingMutations(chunk.Coord);
         }
 
         // Generate a chunk's primal grid (interior relaxed, borders pinned at deterministic
@@ -129,21 +207,25 @@ namespace TerrainGrid
             //    here makes the primal a true 3D mesh ready for both rendering and gameplay.
             //    Border relax (in RelaxBorders) preserves Y, so this is the only place where Y
             //    is set on a fresh chunk.
+            //    IsFlat = "every vertex bottomed out at the bit-exact seabed Y" — anything
+            //    above SeabedY (beach band ramp, land profile) means the dual mesh has real
+            //    geometry and we cannot short-circuit to the shared flat tile.
             bool isFlat = true;
+            float seabedY = Elevation.SeabedY;
             using (TerrainProfiler.Measure(TerrainProfiler.Phase.GenElevation))
             {
                 foreach (Vertex v in verts.ToArray())
                 {
                     float h = Elevation.Sample(v.Position.x, v.Position.z);
-                    if (h != 0f)
-                    {
-                        v.SetHeight(h);
-                        isFlat = false;
-                    }
+                    v.SetHeight(h);
+                    if (h > seabedY) isFlat = false;
                 }
             }
 
             // 2) Classify cells from their vertex heights. Cheap O(verts/cell) per polygon.
+            //    "Land" means above the water line (Y=0); the seabed and beach-band slope are
+            //    both underwater and classify as ocean — gameplay (NPCs, building placement)
+            //    treats those as un-walkable.
             using (TerrainProfiler.Measure(TerrainProfiler.Phase.GenClassify))
             {
                 foreach (Polygon p in polygons)
@@ -248,6 +330,7 @@ namespace TerrainGrid
             {
                 chunk.Dual = noPolygons;
                 chunk.DualBuiltFromVersion = chunk.Version;
+                chunk.DualComplete = true; // flat tiles don't depend on neighbours at all
                 TerrainProfiler.IncDualsBuilt();
                 return;
             }
@@ -256,6 +339,7 @@ namespace TerrainGrid
             Dictionary<(int, int), List<Polygon>> neighborFaces;
             Dictionary<(int, int), ChunkCoord> minNeighborCoord;
 
+            int loadedNeighbors = 0; // counted during gather; feeds DualComplete at the end
             using (TerrainProfiler.Measure(TerrainProfiler.Phase.BuildDualGather))
             {
                 neighborFaces = new Dictionary<(int, int), List<Polygon>>();
@@ -265,6 +349,7 @@ namespace TerrainGrid
                 {
                     if (n == coord) continue;
                     if (!chunks.TryGetValue(n, out PrimalChunk np)) continue;
+                    loadedNeighbors++;
 
                     // Flat chunks never build their dual (they use a shared flat tile at present
                     // time), so they must not enter the ownership race — otherwise a seam cell
@@ -296,14 +381,17 @@ namespace TerrainGrid
                     chunk, hexRadius, neighborFaces, minNeighborCoord);
                 chunk.Dual = dualPolygons;        // GenerateDual now returns List directly — no ToList needed.
                 chunk.DualBuiltFromVersion = chunk.Version;
+                // "Complete" means every one of the 6 candidate neighbour coords was loaded
+                // — i.e. ownership and seam completion were fully resolved. The add-cascade
+                // skips invalidating complete neighbours, which makes camera-pan revisits free.
+                chunk.DualComplete = loadedNeighbors == 6;
             }
             TerrainProfiler.IncDualsBuilt();
         }
 
-        // Invalidate the cached dual on every loaded-or-cached neighbour of `coord`. The
-        // version bump in InvalidateDual makes the publish loop notice — the chunk's primal
-        // didn't change but its visible state did. Idempotent: re-invalidating an already-
-        // invalidated chunk is a no-op (Dual already null, version not re-bumped).
+        // Unconditional cascade. Used by RelaxBorders, where the chunk's primal actually moved
+        // and any neighbour's dual that referenced its old positions is genuinely stale —
+        // DualComplete doesn't save us, the data really has changed.
         void InvalidateNeighborDuals(ChunkCoord coord)
         {
             foreach (ChunkCoord n in coord.HexesInRange(1))
@@ -314,11 +402,36 @@ namespace TerrainGrid
             }
         }
 
+        // Conditional cascade. Used when a chunk is *added* to the loaded set (fresh generate,
+        // cache revive, or store restore). A neighbour whose dual is DualComplete was built
+        // when all 6 of its candidate neighbour coords were loaded — including this newcomer's
+        // coord — so its ownership and seam cells are already correct and we skip it. Only
+        // neighbours with DualComplete=false (built with some neighbour missing) need rebuilding
+        // to acknowledge the newcomer. This is the optimization that makes camera-pan revisits
+        // free: cached chunks come back together, find each other already complete, and no work
+        // cascades.
+        void InvalidateNeighborDualsOnAdd(ChunkCoord coord)
+        {
+            foreach (ChunkCoord n in coord.HexesInRange(1))
+            {
+                if (n == coord) continue;
+                if (chunks.TryGetValue(n, out PrimalChunk active))
+                {
+                    if (!active.DualComplete) InvalidateDual(active);
+                }
+                else if (cache.TryGetValue(n, out PrimalChunk cached))
+                {
+                    if (!cached.DualComplete) InvalidateDual(cached);
+                }
+            }
+        }
+
         static void InvalidateDual(PrimalChunk c)
         {
             if (c.Dual == null) return; // already stale; don't re-bump version
             c.Dual = null;
             c.DualBuiltFromVersion = -1;
+            c.DualComplete = false;     // semantic: the (non-existent) dual no longer "knows about" anything
             c.Version++;
         }
 

@@ -187,6 +187,10 @@ namespace TerrainGrid
                 foreach (ChunkCoord coord in renderModel.LoadedCoords)
                 {
                     if (!renderModel.TryGet(coord, out PrimalChunk primal)) continue;
+                    // Published render-mirror copies omit the primal graph (DeepCopy nulls it
+                    // out to avoid copying data no consumer reads). Primal gizmos are therefore
+                    // not visible on mirrored chunks — silently skip rather than NRE.
+                    if (primal.Polygons == null) continue;
 
                     Gizmos.color = primalGizmoColor;
                     foreach (Polygon p in primal.Polygons) DrawPolygon(p);

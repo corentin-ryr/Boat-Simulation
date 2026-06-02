@@ -52,6 +52,9 @@ namespace TerrainGrid
         readonly object gate = new object();
         readonly AutoResetEvent signal = new AutoResetEvent(false);
         readonly Dictionary<int, ConsumerState> consumers = new();
+        // Main → worker tile mutations. Drained at the top of RunPass under `gate`, applied
+        // serially against the model so writes never race with relax / dual build / publish.
+        readonly ConcurrentQueue<TileMutation> mutationQueue = new();
         int nextId;
         bool dirty;
         bool stop;
@@ -90,6 +93,27 @@ namespace TerrainGrid
             }
             signal.Set();
         }
+
+        // Paint a primal cell from gameplay code. The mutation is applied on the worker
+        // thread on the next pass — readers will see it via TryGetTileProperty once that
+        // pass completes (or immediately if they call back after the painted chunk reloads).
+        public void EnqueueTileMutation(ChunkCoord coord, int polygonIndex, TileProperty value)
+        {
+            mutationQueue.Enqueue(new TileMutation
+            {
+                Coord = coord,
+                PolygonIndex = polygonIndex,
+                Value = value,
+            });
+            lock (gate) { dirty = true; }
+            signal.Set();
+        }
+
+        // Read a primal cell's gameplay slot. The model takes its own narrow tileLock around
+        // every read/write of tile state, so this call is safely usable from any thread —
+        // gameplay, UI, debug overlays — without coordinating with the streamer gate.
+        public bool TryGetTileProperty(ChunkCoord coord, int polygonIndex, out TileProperty value)
+            => model.TryGetTileProperty(coord, polygonIndex, out value);
 
         // Pop a finished publish for this consumer, if any.
         public bool TryDrainResult(ChunkConsumer consumer, out StreamResult result)
@@ -161,6 +185,14 @@ namespace TerrainGrid
                 snap = consumers.Values.ToList();
                 desiredSnap = snap.Select(s => new HashSet<ChunkCoord>(s.Desired)).ToList();
                 renderSnap = snap.Select(s => s.RenderReady).ToList();
+
+                // Drain tile mutations as part of the pass kickoff. ApplyTileMutation takes
+                // its own tileLock for read/write coherence — we don't need `gate` for the
+                // tile state itself. Doing it here just ties paint visibility to the same
+                // pass that publishes chunk updates, so consumers see paints and version
+                // bumps in lockstep.
+                while (mutationQueue.TryDequeue(out TileMutation m))
+                    model.ApplyTileMutation(m.Coord, m.PolygonIndex, m.Value);
             }
 
             // Loaded set: render consumers' sets expanded by a 1-ring halo (seam welding +

@@ -1,0 +1,120 @@
+﻿#pragma kernel Fft
+#pragma kernel PostProcess
+
+#pragma multi_compile _ FFT_ARRAY_TARGET
+#pragma multi_compile _ FFT_SIZE_128 FFT_SIZE_256 FFT_SIZE_512
+
+#if defined(FFT_SIZE_512)
+#define SIZE 512
+#define LOG_SIZE 9
+#elif defined(FFT_SIZE_256)
+#define SIZE 256
+#define LOG_SIZE 8
+#elif defined(FFT_SIZE_128)
+#define SIZE 128
+#define LOG_SIZE 7
+#else
+#define SIZE 64
+#define LOG_SIZE 6
+#endif
+
+static uint Size = SIZE;
+
+#ifdef FFT_ARRAY_TARGET
+RWTexture2DArray<float4> Target;
+#else
+RWTexture2D<float4> Target;
+#endif
+
+cbuffer Params
+{
+    uint TargetsCount;
+    bool Direction;
+    bool Inverse;
+    bool Scale;
+    bool Permute;
+};
+
+groupshared float4 buffer[2][SIZE];
+
+float2 ComplexMult(float2 a, float2 b)
+{
+    return float2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
+}
+
+void ButterflyValues(uint step, uint index, out uint2 indices, out float2 twiddle)
+{
+    const float twoPi = 6.28318530718;
+    uint b = Size >> (step + 1);
+    uint w = b * (index / b);
+    uint i = (w + index) % Size;
+    sincos(-twoPi / Size * w, twiddle.y, twiddle.x);
+    if (Inverse)
+        twiddle.y = -twiddle.y;
+    indices = uint2(i, i + b);
+}
+
+float4 DoFft(uint threadIndex, float4 input)
+{
+    buffer[0][threadIndex] = input;
+    GroupMemoryBarrierWithGroupSync();
+    bool flag = false;
+    
+    [unroll(LOG_SIZE)]
+    for (uint step = 0; step < LOG_SIZE; step++)
+    {
+        uint2 inputsIndices;
+        float2 twiddle;
+        ButterflyValues(step, threadIndex, inputsIndices, twiddle);
+        
+        float4 v = buffer[flag][inputsIndices.y];
+        buffer[!flag][threadIndex] = buffer[flag][inputsIndices.x]
+		    + float4(ComplexMult(twiddle, v.xy), ComplexMult(twiddle, v.zw));
+        flag = !flag;
+        GroupMemoryBarrierWithGroupSync();
+    }
+    
+    return buffer[flag][threadIndex];
+}
+
+[numthreads(SIZE, 1, 1)]
+void Fft(uint3 id : SV_DispatchThreadID)
+{
+    uint threadIndex = id.x;
+    uint2 targetIndex;
+    if (Direction)
+        targetIndex = id.yx;
+    else
+        targetIndex = id.xy;
+    
+#ifdef FFT_ARRAY_TARGET
+    for (uint k = 0; k < TargetsCount; k++)
+    {
+        Target[uint3(targetIndex, k)] = DoFft(threadIndex, Target[uint3(targetIndex, k)]);
+    }
+#else
+    Target[targetIndex] = DoFft(threadIndex, Target[targetIndex]);
+#endif
+}
+
+float4 DoPostProcess(float4 input, uint2 id)
+{
+    if (Scale)
+        input /= Size * Size;
+    if (Permute)
+        input *= 1.0 - 2.0 * ((id.x + id.y) % 2);
+    return input;
+}
+
+[numthreads(8, 8, 1)]
+void PostProcess(uint3 id : SV_DispatchThreadID)
+{
+#ifdef FFT_ARRAY_TARGET
+    for (uint i = 0; i < TargetsCount; i++)
+    {
+        Target[uint3(id.xy, i)] = DoPostProcess(Target[uint3(id.xy, i)], id.xy);
+    }
+#else
+    Target[id.xy] = DoPostProcess(Target[id.xy], id.xy);
+#endif
+}

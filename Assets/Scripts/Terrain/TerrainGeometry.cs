@@ -33,6 +33,22 @@ namespace TerrainGrid
                 vertex.AddPolygon(this);
         }
 
+        // Read-only ctor: builds a Polygon over the given vertices WITHOUT registering it on
+        // their incident-polygon sets. The published render-mirror copies use this — the
+        // consumer only reads positions via GetVerticesPosition / GetVertices and never walks
+        // vertex.Polygons on the dual, so wiring back-pointers there is pure cost (one
+        // HashSet<Polygon> allocation per dual Vertex plus a HashSet.Add per polygon corner).
+        // Do NOT use on the worker side: relaxation, neighbour-finding, and dual generation
+        // all walk vertex.Polygons and would silently miss these polygons.
+        public static Polygon CreateUnlinked(Vertex[] _vertices)
+        {
+            Polygon p = new Polygon();
+            p.vertices = _vertices;
+            return p;
+        }
+
+        Polygon() { }
+
         public void SetVertex(Vertex vertex, int vertexIndex)
         {
             vertices[vertexIndex] = vertex;
@@ -105,7 +121,11 @@ namespace TerrainGrid
     public class Vertex
     {
         Vector3 position;
-        HashSet<Polygon> polygons = new HashSet<Polygon>();
+        // Lazy: allocated on first AddPolygon. Vertices that never get linked into a polygon
+        // (e.g. dual vertices on the published render mirror, built via Polygon.CreateUnlinked)
+        // avoid the HashSet allocation entirely — saves hundreds of allocations per chunk
+        // publish.
+        HashSet<Polygon> polygons;
         bool isEdge;
         Vector3 movement = Vector3.zero;
 
@@ -113,13 +133,18 @@ namespace TerrainGrid
 
         public Vector3 Position { get => position; }
         // The live incident-polygon set, exposed read-only so callers can enumerate it without
-        // the per-access array allocation the old ToArray() getter caused. Do not mutate the
-        // returned collection — use AddPolygon/RemovePolygon.
-        public IReadOnlyCollection<Polygon> Polygons => polygons;
+        // the per-access array allocation the old ToArray() getter caused. Returns an empty
+        // collection when no polygons have been registered yet. Do not mutate the returned
+        // collection — use AddPolygon/RemovePolygon.
+        public IReadOnlyCollection<Polygon> Polygons => polygons ?? (IReadOnlyCollection<Polygon>)System.Array.Empty<Polygon>();
         public bool IsEdge { get => isEdge; set => isEdge = value; }
 
-        public void AddPolygon(Polygon polygon) { polygons.Add(polygon); }
-        public void RemovePolygon(Polygon polygon) { polygons.Remove(polygon); }
+        public void AddPolygon(Polygon polygon)
+        {
+            if (polygons == null) polygons = new HashSet<Polygon>();
+            polygons.Add(polygon);
+        }
+        public void RemovePolygon(Polygon polygon) { polygons?.Remove(polygon); }
 
         public void SetHeight(float height)
         {
