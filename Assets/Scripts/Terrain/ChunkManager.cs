@@ -66,6 +66,18 @@ namespace TerrainGrid
         // streaming consumers and collider needs on the surface. Available after Start().
         public TerrainStreamer Streamer => streamer;
         public ChunkSurface Surface => surface;
+
+        // Read-only handle on the main-thread render mirror's view of a chunk. Lets gameplay
+        // code (e.g. TilePainter) access published-side data — centroids for nearest-tile
+        // lookup, polygon count for bounds — without touching the authoritative worker model.
+        // Returns false when the chunk isn't currently in the render set.
+        public bool TryGetPublishedChunk(ChunkCoord coord, out PrimalChunk chunk)
+            => renderModel.TryGet(coord, out chunk);
+
+        // Exposed scalars so external scripts (TilePainter, save-load) can match the same
+        // ChunkCoord math the model uses without duplicating constants.
+        public float HexRadius => hexRadius;
+        public int ChunkGridSize => chunkGridSize;
         ChunkCoord lastCameraChunk;
         HashSet<ChunkCoord> currentRenderSet; // chunks we want meshed (renderRadius around camera)
 

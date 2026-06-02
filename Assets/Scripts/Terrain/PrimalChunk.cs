@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using UnityEngine;
 
 namespace TerrainGrid
 {
@@ -43,6 +44,21 @@ namespace TerrainGrid
         // / TerrainStreamer.EnqueueTileMutation); main thread reads through the streamer's
         // lock-protected getter.
         public TileProperty[] TileProperties;
+
+        // Cached primal cell centroids, parallel to Polygons by index. Computed once at
+        // generation (and restored from snapshot) so the main-thread TilePainter can do a
+        // nearest-centroid lookup against a hit world position without having to walk the
+        // primal polygon graph (which DeepCopy drops on the published mirror). Shipped
+        // through DeepCopy so consumers see it.
+        public Vector3[] PrimalCellCentroids;
+
+        // Per dual-mesh-vertex primal cell index, flattened in the same order
+        // ChunkSurface.BuildMesh walks (each dual polygon contributes its corners in
+        // post-sort order). -1 marks a corner whose owning primal face lives in a neighbour
+        // chunk (border completion). Lets the render side palette-map vertex colours from
+        // TileProperties without having to reconstruct the primal→dual centroid mapping.
+        // Null on flat chunks (they render the shared flat tile, no per-vertex tint).
+        public int[] DualVertexPrimalIndex;
 
         public PrimalChunk(ChunkCoord coord, List<Polygon> polygons, VertexCollection verts)
         {
@@ -93,6 +109,30 @@ namespace TerrainGrid
                 }
             }
 
+            // Render-side parallel arrays. All three are blittable, so each is a single
+            // Array.Copy with no per-element allocation. Centroids + dual index are needed
+            // by TilePainter (cursor → tile lookup) and BuildMesh (vertex-colour palette);
+            // TileProperties are needed by BuildMesh to choose the colour. Skipped on flat
+            // chunks because the shared flat tile path doesn't read them.
+            Vector3[] centroidsCopy = null;
+            if (PrimalCellCentroids != null)
+            {
+                centroidsCopy = new Vector3[PrimalCellCentroids.Length];
+                System.Array.Copy(PrimalCellCentroids, centroidsCopy, PrimalCellCentroids.Length);
+            }
+            int[] dvpiCopy = null;
+            if (DualVertexPrimalIndex != null)
+            {
+                dvpiCopy = new int[DualVertexPrimalIndex.Length];
+                System.Array.Copy(DualVertexPrimalIndex, dvpiCopy, DualVertexPrimalIndex.Length);
+            }
+            TileProperty[] tpCopy = null;
+            if (TileProperties != null)
+            {
+                tpCopy = new TileProperty[TileProperties.Length];
+                System.Array.Copy(TileProperties, tpCopy, TileProperties.Length);
+            }
+
             // Primal graph deliberately omitted (Polygons=null, Verts=null). Consumers must
             // null-check if they access them.
             return new PrimalChunk(Coord, null, null)
@@ -102,6 +142,9 @@ namespace TerrainGrid
                 DualBuiltFromVersion = DualBuiltFromVersion,
                 DualComplete = DualComplete,
                 IsFlat = IsFlat,
+                PrimalCellCentroids = centroidsCopy,
+                DualVertexPrimalIndex = dvpiCopy,
+                TileProperties = tpCopy,
             };
         }
     }

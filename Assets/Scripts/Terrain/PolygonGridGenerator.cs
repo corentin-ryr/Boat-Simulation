@@ -57,20 +57,29 @@ namespace TerrainGrid
         // ComputeNeighbors on the resulting dual polygons — they're consumed by mesh build
         // (no neighbour access) and discarded by DeepCopy (which drops them anyway), so the
         // edge-pairing pass would be pure waste.
-        public static (List<Polygon>, VertexCollection) GenerateDual(
+        public static (List<Polygon>, VertexCollection, int[]) GenerateDual(
             PrimalChunk chunk, float hexRadius,
             Dictionary<(int, int), List<Polygon>> neighborFaces,
-            Dictionary<(int, int), ChunkCoord> minNeighborCoord)
+            Dictionary<(int, int), ChunkCoord> minNeighborCoord,
+            Dictionary<Polygon, int> primalIndex)
         {
             // Dual polygon count is bounded above by primal vertex count.
             List<Polygon> dualPolygons = new List<Polygon>(chunk.Verts.Count);
             VertexCollection dualVertices = new VertexCollection();
+
+            // Per-corner primal-cell index, flattened in the same iteration order
+            // ChunkSurface.BuildMesh walks (each dual polygon contributes its corner
+            // count of entries in vertex-emit order). -1 marks a corner whose owning
+            // primal face lives in a neighbour chunk — the render side maps that to
+            // the neutral palette entry. Sized roughly: ~4 corners per dual cell.
+            List<int> flatPrimalIndex = new List<int>(chunk.Verts.Count * 4);
 
             // Reusable buffers. Typical dual cell has 3-7 faces; 16 covers the wide ring
             // around a 3-chunk corner with comfortable headroom.
             Polygon[] facesBuf = new Polygon[16];
             Vertex[]  vertsBuf = new Vertex[16];
             float[]   anglesBuf = new float[16];
+            int[]     primalIdxBuf = new int[16];
 
             foreach (Vertex vertex in chunk.Verts.Values)
             {
@@ -78,7 +87,12 @@ namespace TerrainGrid
                 int faceCount = 0;
                 foreach (Polygon p in vertex.Polygons)
                 {
-                    if (faceCount >= facesBuf.Length) Array.Resize(ref facesBuf, facesBuf.Length * 2);
+                    if (faceCount >= facesBuf.Length)
+                    {
+                        int newLen = facesBuf.Length * 2;
+                        Array.Resize(ref facesBuf, newLen);
+                        Array.Resize(ref primalIdxBuf, newLen);
+                    }
                     facesBuf[faceCount++] = p;
                 }
 
@@ -97,7 +111,12 @@ namespace TerrainGrid
                     {
                         for (int i = 0, n = extra.Count; i < n; i++)
                         {
-                            if (faceCount >= facesBuf.Length) Array.Resize(ref facesBuf, facesBuf.Length * 2);
+                            if (faceCount >= facesBuf.Length)
+                            {
+                                int newLen = facesBuf.Length * 2;
+                                Array.Resize(ref facesBuf, newLen);
+                                Array.Resize(ref primalIdxBuf, newLen);
+                            }
                             facesBuf[faceCount++] = extra[i];
                         }
                     }
@@ -111,6 +130,13 @@ namespace TerrainGrid
                     Array.Resize(ref anglesBuf, faceCount);
                 }
 
+                // Resolve "which primal cell index does this corner's face represent?" up
+                // front. Neighbour-chunk faces (added from `extra` above) are not present in
+                // `primalIndex` and naturally fall to -1 → neutral colour at render time.
+                for (int i = 0; i < faceCount; i++)
+                    primalIdxBuf[i] = primalIndex != null
+                        && primalIndex.TryGetValue(facesBuf[i], out int x) ? x : -1;
+
                 // Materialize dual vertices (face centers) and their sort key (angle from
                 // this primal vertex around the up axis) in one pass.
                 Vector3 vp = vertex.Position;
@@ -123,20 +149,25 @@ namespace TerrainGrid
 
                 // Insertion sort by angle — faceCount is small (3-8 normally, up to ~12
                 // around a 3-chunk corner) so the simpler algorithm beats a comparator-based
-                // Array.Sort that would allocate a delegate per call.
+                // Array.Sort that would allocate a delegate per call. We carry the
+                // primal-index buffer alongside so the post-sort order matches the corner
+                // order BuildMesh will walk.
                 for (int i = 1; i < faceCount; i++)
                 {
                     float a = anglesBuf[i];
                     Vertex v = vertsBuf[i];
+                    int pi = primalIdxBuf[i];
                     int j = i - 1;
                     while (j >= 0 && anglesBuf[j] > a)
                     {
                         anglesBuf[j + 1] = anglesBuf[j];
                         vertsBuf[j + 1] = vertsBuf[j];
+                        primalIdxBuf[j + 1] = primalIdxBuf[j];
                         j--;
                     }
                     anglesBuf[j + 1] = a;
                     vertsBuf[j + 1] = v;
+                    primalIdxBuf[j + 1] = pi;
                 }
 
                 // Polygon takes ownership of the vertex array, so we must allocate a
@@ -144,9 +175,13 @@ namespace TerrainGrid
                 Vertex[] polyVerts = new Vertex[faceCount];
                 Array.Copy(vertsBuf, polyVerts, faceCount);
                 dualPolygons.Add(new Polygon(polyVerts));
+
+                // Emit the corner→primal mapping in the same order BuildMesh will read it.
+                for (int i = 0; i < faceCount; i++)
+                    flatPrimalIndex.Add(primalIdxBuf[i]);
             }
 
-            return (dualPolygons, dualVertices);
+            return (dualPolygons, dualVertices, flatPrimalIndex.ToArray());
         }
 
         #region Border relaxation

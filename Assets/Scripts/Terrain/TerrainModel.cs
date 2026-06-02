@@ -243,8 +243,19 @@ namespace TerrainGrid
                 }
             }
 
+            // Cache primal cell centroids so the render-side painter can do nearest-centroid
+            // lookups without walking the primal graph (which DeepCopy drops). Cheap O(verts)
+            // per polygon; shipped through DeepCopy onto the consumer mirror.
+            Vector3[] centroids = new Vector3[polygons.Count];
+            for (int i = 0; i < polygons.Count; i++)
+                centroids[i] = polygons[i].GetCenter();
+
             TerrainProfiler.IncChunksGenerated();
-            return new PrimalChunk(coord, polygons, verts) { IsFlat = isFlat };
+            return new PrimalChunk(coord, polygons, verts)
+            {
+                IsFlat = isFlat,
+                PrimalCellCentroids = centroids,
+            };
         }
 
         // Free a chunk from active memory, first saving its (relaxed) state so a later reload
@@ -377,9 +388,18 @@ namespace TerrainGrid
 
             using (TerrainProfiler.Measure(TerrainProfiler.Phase.BuildDualGenerate))
             {
-                var (dualPolygons, _) = PolygonGridGenerator.GenerateDual(
-                    chunk, hexRadius, neighborFaces, minNeighborCoord);
+                // Reverse lookup: "what's the index of this Polygon in chunk.Polygons?"
+                // Fed to GenerateDual so each dual corner can be tagged with the owning
+                // primal cell index (used by the render-side vertex-colour tint). Polygons
+                // from neighbouring chunks aren't in this dict and naturally fall to -1
+                // (= neutral palette entry at render time).
+                var primalIndex = new Dictionary<Polygon, int>(chunk.Polygons.Count);
+                for (int i = 0; i < chunk.Polygons.Count; i++) primalIndex[chunk.Polygons[i]] = i;
+
+                var (dualPolygons, _, dualVertPrimalIdx) = PolygonGridGenerator.GenerateDual(
+                    chunk, hexRadius, neighborFaces, minNeighborCoord, primalIndex);
                 chunk.Dual = dualPolygons;        // GenerateDual now returns List directly — no ToList needed.
+                chunk.DualVertexPrimalIndex = dualVertPrimalIdx;
                 chunk.DualBuiltFromVersion = chunk.Version;
                 // "Complete" means every one of the 6 candidate neighbour coords was loaded
                 // — i.e. ownership and seam completion were fully resolved. The add-cascade

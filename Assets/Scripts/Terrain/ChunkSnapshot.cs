@@ -30,6 +30,12 @@ namespace TerrainGrid
         // reconstructable from IsFlat alone).
         public Vector3[][] DualPolygonPositions;
         public bool[][] DualPolygonIsEdge;
+        // Flat per-dual-mesh-vertex primal-cell index (parallel to the corner walk used by
+        // ChunkSurface.BuildMesh). Persisted so a restored chunk's vertex-colour tinting
+        // works without re-running BuildDual. Null for flat chunks and pre-tile-property
+        // snapshots; null restores leave PrimalChunk.DualVertexPrimalIndex null and the
+        // render layer falls back to neutral colouring until the next BuildDual.
+        public int[] DualVertexPrimalIndex;
         public bool DualComplete;
         public int DualBuiltFromVersion = -1;
 
@@ -105,6 +111,15 @@ namespace TerrainGrid
                 }
                 snap.DualComplete = chunk.DualComplete;
                 snap.DualBuiltFromVersion = chunk.DualBuiltFromVersion;
+
+                // Persist the corner→primal-cell mapping alongside the dual itself so a
+                // restored chunk can tint immediately without rebuilding the dual.
+                if (chunk.DualVertexPrimalIndex != null)
+                {
+                    snap.DualVertexPrimalIndex = new int[chunk.DualVertexPrimalIndex.Length];
+                    System.Array.Copy(chunk.DualVertexPrimalIndex, snap.DualVertexPrimalIndex,
+                        chunk.DualVertexPrimalIndex.Length);
+                }
             }
 
             return snap;
@@ -136,10 +151,17 @@ namespace TerrainGrid
                 polygons.Add(poly);
             }
 
+            // Recompute primal cell centroids inline — they're a pure function of polygon
+            // vertex positions (which we just restored), so persisting them would just bloat
+            // the snapshot. Cheap O(verts/cell) per polygon.
+            Vector3[] centroids = new Vector3[polygons.Count];
+            for (int i = 0; i < polygons.Count; i++) centroids[i] = polygons[i].GetCenter();
+
             PrimalChunk pc = new PrimalChunk(coord, polygons, vc)
             {
                 Version = snap.Version,
                 IsFlat = snap.IsFlat,
+                PrimalCellCentroids = centroids,
             };
 
             // Gameplay tile slots: restore only when present and length-matched, matching the
@@ -179,6 +201,16 @@ namespace TerrainGrid
                 pc.Dual = dual;
                 pc.DualBuiltFromVersion = snap.DualBuiltFromVersion;
                 pc.DualComplete = snap.DualComplete;
+
+                // Restore the corner→primal-cell mapping. If the snapshot predates this
+                // field, leave it null and the render layer paints with neutral tint until
+                // the next BuildDual repopulates it.
+                if (snap.DualVertexPrimalIndex != null)
+                {
+                    pc.DualVertexPrimalIndex = new int[snap.DualVertexPrimalIndex.Length];
+                    System.Array.Copy(snap.DualVertexPrimalIndex, pc.DualVertexPrimalIndex,
+                        snap.DualVertexPrimalIndex.Length);
+                }
             }
             // else: older snapshot or chunk that hadn't built its dual yet at capture time.
             // Falls back to the original behaviour (Dual=null → BuildDual will run next pass).

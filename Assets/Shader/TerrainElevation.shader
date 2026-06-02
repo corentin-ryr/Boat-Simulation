@@ -85,14 +85,30 @@ Shader "Custom/TerrainElevation"
             {
                 float4 positionOS : POSITION;
                 float3 normalOS   : NORMAL;
+                float4 color      : COLOR;       // per-vertex tile-property tint (legacy / fallback)
+                // Nearest-neighbour tile shading: BuildMesh unshares vertices per triangle and
+                // packs (barycentric, cornerA_rgb, cornerB_rgb, cornerC_rgb) onto every vertex
+                // of the triangle. All three vertices of a triangle output the SAME three
+                // corner colours so interpolation leaves the tuple constant across the
+                // triangle; the barycentric, however, varies per vertex and interpolates to
+                // the actual barycentric weight at each fragment.
+                float3 barycentric : TEXCOORD0;
+                float3 cornerA     : TEXCOORD1;
+                float3 cornerB     : TEXCOORD2;
+                float3 cornerC     : TEXCOORD3;
             };
 
             struct Varyings
             {
-                float4 positionCS : SV_POSITION;
-                float3 positionWS : TEXCOORD0;
-                float3 normalWS   : TEXCOORD1;
-                float  fogFactor  : TEXCOORD2;
+                float4 positionCS  : SV_POSITION;
+                float3 positionWS  : TEXCOORD0;
+                float3 normalWS    : TEXCOORD1;
+                float  fogFactor   : TEXCOORD2;
+                float3 barycentric : TEXCOORD3;
+                float3 cornerA     : TEXCOORD4;
+                float3 cornerB     : TEXCOORD5;
+                float3 cornerC     : TEXCOORD6;
+                float4 color       : COLOR;      // legacy pass-through (still consumed for flat tiles)
             };
 
             Varyings Vert(Attributes IN)
@@ -100,10 +116,15 @@ Shader "Custom/TerrainElevation"
                 Varyings OUT;
                 VertexPositionInputs pos = GetVertexPositionInputs(IN.positionOS.xyz);
                 VertexNormalInputs   nrm = GetVertexNormalInputs(IN.normalOS);
-                OUT.positionCS = pos.positionCS;
-                OUT.positionWS = pos.positionWS;
-                OUT.normalWS   = nrm.normalWS;
-                OUT.fogFactor  = ComputeFogFactor(pos.positionCS.z);
+                OUT.positionCS  = pos.positionCS;
+                OUT.positionWS  = pos.positionWS;
+                OUT.normalWS    = nrm.normalWS;
+                OUT.fogFactor   = ComputeFogFactor(pos.positionCS.z);
+                OUT.color       = IN.color;
+                OUT.barycentric = IN.barycentric;
+                OUT.cornerA     = IN.cornerA;
+                OUT.cornerB     = IN.cornerB;
+                OUT.cornerC     = IN.cornerC;
                 return OUT;
             }
 
@@ -136,6 +157,22 @@ Shader "Custom/TerrainElevation"
                     col = lerp(col, _ColorRock.rgb, t);
                 }
                 #endif
+
+                // 2b) Tile-property tint, nearest-neighbour across each triangle. The mesh
+                //     ships each triangle as 3 unshared vertices carrying the same triple of
+                //     corner colours (cornerA/B/C) plus barycentric identifiers that
+                //     interpolate to per-pixel weights. We pick the colour whose weight is
+                //     largest — i.e. the Voronoi region of the nearest primal corner —
+                //     giving sharp uniformly-coloured primal-cell regions instead of the
+                //     soft gradient that linear interpolation produced before. Multiplies
+                //     AFTER biome / slope so a painted road still reads slightly grassy on
+                //     grass and slightly rocky on a cliff.
+                float3 b = IN.barycentric;
+                float3 tileTint;
+                if (b.x >= b.y && b.x >= b.z) tileTint = IN.cornerA;
+                else if (b.y >= b.z)          tileTint = IN.cornerB;
+                else                          tileTint = IN.cornerC;
+                col *= tileTint;
 
                 // 3) Standard URP lighting (main directional + soft ambient SH).
                 Light mainLight  = GetMainLight(TransformWorldToShadowCoord(IN.positionWS));

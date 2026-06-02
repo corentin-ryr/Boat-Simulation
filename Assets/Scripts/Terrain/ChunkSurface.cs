@@ -239,7 +239,7 @@ namespace TerrainGrid
                 {
                     if (p.Mesh != null) UnityEngine.Object.Destroy(p.Mesh);
                     using (TerrainProfiler.Measure(TerrainProfiler.Phase.BuildMesh))
-                        p.Mesh = BuildMesh(primal.Dual);
+                        p.Mesh = BuildMesh(primal);
                     using (TerrainProfiler.Measure(TerrainProfiler.Phase.MeshAssign))
                         p.Mf.sharedMesh = p.Mesh;
                     if (p.Mc != null)
@@ -389,22 +389,125 @@ namespace TerrainGrid
             return flatTile;
         }
 
-        static Mesh BuildMesh(List<Polygon> polygons)
+        // Static palette mapping a TileKind to its vertex-colour multiplier. Neutral white
+        // is the no-op multiply, so untouched cells render exactly as before. Painted kinds
+        // shift the base hue without dimming it too aggressively (alpha=255 for all). The
+        // sentinel entry at index `kindCount` covers neighbour-chunk corners (primal index
+        // -1) — same neutral as Default so unowned border vertices blend invisibly.
+        static readonly Color32[] TileKindPalette =
         {
-            var vertices = new List<Vector3>();
-            var triangles = new List<int>();
+            new Color32(255, 255, 255, 255), // Default — neutral, base colour unchanged
+            new Color32(160, 150, 135, 255), // Road    — warm grey
+            new Color32(210, 120, 110, 255), // Building — soft red
+            new Color32(255, 255, 255, 255), // [-1 sentinel] — no owning primal, neutral
+        };
+        static readonly int PaletteNeutralIndex = TileKindPalette.Length - 1;
 
+        static Color32 ColorFor(int primalIdx, TileProperty[] tp)
+        {
+            if (primalIdx < 0 || tp == null || primalIdx >= tp.Length)
+                return TileKindPalette[PaletteNeutralIndex];
+            int kind = (int)tp[primalIdx].Kind;
+            if ((uint)kind >= (uint)PaletteNeutralIndex) return TileKindPalette[PaletteNeutralIndex];
+            return TileKindPalette[kind];
+        }
+
+        // RGB components of a palette entry, packed for upload as a UV channel. Alpha is
+        // dropped since the shader only multiplies RGB; this also keeps the channel as a
+        // Vector3 instead of Vector4.
+        static Vector3 ColorRgb(Color32 c) => new Vector3(c.r / 255f, c.g / 255f, c.b / 255f);
+
+        static Mesh BuildMesh(PrimalChunk primal)
+        {
+            List<Polygon> polygons = primal.Dual;
+            int[] dvpi = primal.DualVertexPrimalIndex;          // corner → primal cell index (or -1)
+            TileProperty[] tp = primal.TileProperties;          // null = all Default → all neutral
+
+            // We unshare vertices per TRIANGLE so the fragment shader can compute nearest
+            // neighbour across the triangle's three primal corners. Each emitted vertex
+            // carries the same (cA, cB, cC) triple of corner colours plus a barycentric
+            // identifier (which of the three I am). After linear interpolation in the
+            // pipeline, the fragment sees a constant (cA, cB, cC) and a per-pixel barycentric
+            // weighting; it picks whichever corner has the largest weight. Result: each
+            // primal-Voronoi region of the triangle takes its owning cell's palette colour
+            // with a sharp edge along the bisectors.
+            //
+            // Storage cost: a polygon with N corners has (N-2) triangles, each with 3 unique
+            // vertices → 3·(N-2) verts where the shared-fan version had N. For typical
+            // dual quads (N=4) this is 1.5× the vertex count; for hexagonal-ish duals (N=6)
+            // it's 2×. Triangle and index counts are unchanged.
+            var vertices    = new List<Vector3>();
+            var triangles   = new List<int>();
+            var colors      = new List<Color32>();   // per-vertex own colour (back-compat / fallback)
+            var barycentric = new List<Vector3>();   // (1,0,0), (0,1,0), (0,0,1) per triangle vertex
+            var cornerA_rgb = new List<Vector3>();   // all three identical per triangle, so each
+            var cornerB_rgb = new List<Vector3>();   // vertex in the triangle outputs the same triple
+            var cornerC_rgb = new List<Vector3>();
+
+            int cornerCursor = 0;   // index into dvpi; advances by each polygon's corner count
             foreach (Polygon p in polygons)
             {
                 Vector3[] verts = p.GetVerticesPosition();
-                if (verts.Length < 3) continue;
-                int baseIndex = vertices.Count;
-                vertices.AddRange(verts);
-                for (int i = 1; i < verts.Length - 1; i++)
+                if (verts.Length < 3)
                 {
-                    triangles.Add(baseIndex);
-                    triangles.Add(baseIndex + i + 1);
-                    triangles.Add(baseIndex + i);
+                    // GenerateDual already skipped these, but if a legacy/restored dual still
+                    // contains one we must keep dvpi's cursor in sync with the corner walk.
+                    cornerCursor += verts.Length;
+                    continue;
+                }
+
+                // Resolve every corner's palette colour up front so each fan triangle below
+                // can pick three of them without redoing the dvpi/tp lookups.
+                int n = verts.Length;
+                Color32[] cornerColors = new Color32[n];
+                for (int i = 0; i < n; i++)
+                {
+                    int primalIdx = dvpi != null && cornerCursor + i < dvpi.Length
+                        ? dvpi[cornerCursor + i] : -1;
+                    cornerColors[i] = ColorFor(primalIdx, tp);
+                }
+                cornerCursor += n;
+
+                // Triangle fan from corner 0: indices (0, i+1, i) for i = 1..n-2. We emit
+                // three NEW vertices per triangle; never sharing means each triangle's
+                // barycentric identification is self-contained.
+                for (int i = 1; i < n - 1; i++)
+                {
+                    int idxA = 0;
+                    int idxB = i + 1;
+                    int idxC = i;
+
+                    Color32 cA = cornerColors[idxA];
+                    Color32 cB = cornerColors[idxB];
+                    Color32 cC = cornerColors[idxC];
+                    Vector3 vA = ColorRgb(cA);
+                    Vector3 vB = ColorRgb(cB);
+                    Vector3 vC = ColorRgb(cC);
+
+                    int baseIdx = vertices.Count;
+
+                    // Vertex A — owns barycentric (1,0,0)
+                    vertices.Add(verts[idxA]);
+                    colors.Add(cA);
+                    barycentric.Add(new Vector3(1, 0, 0));
+                    cornerA_rgb.Add(vA); cornerB_rgb.Add(vB); cornerC_rgb.Add(vC);
+
+                    // Vertex B — (0,1,0)
+                    vertices.Add(verts[idxB]);
+                    colors.Add(cB);
+                    barycentric.Add(new Vector3(0, 1, 0));
+                    cornerA_rgb.Add(vA); cornerB_rgb.Add(vB); cornerC_rgb.Add(vC);
+
+                    // Vertex C — (0,0,1)
+                    vertices.Add(verts[idxC]);
+                    colors.Add(cC);
+                    barycentric.Add(new Vector3(0, 0, 1));
+                    cornerA_rgb.Add(vA); cornerB_rgb.Add(vB); cornerC_rgb.Add(vC);
+
+                    // Same winding the legacy fan used: (0, i+1, i).
+                    triangles.Add(baseIdx);
+                    triangles.Add(baseIdx + 1);
+                    triangles.Add(baseIdx + 2);
                 }
             }
 
@@ -412,8 +515,13 @@ namespace TerrainGrid
             {
                 indexFormat = UnityEngine.Rendering.IndexFormat.UInt32,
                 vertices = vertices.ToArray(),
-                triangles = triangles.ToArray()
+                triangles = triangles.ToArray(),
+                colors32 = colors.ToArray(),
             };
+            mesh.SetUVs(0, barycentric);     // TEXCOORD0 → fragment barycentric
+            mesh.SetUVs(1, cornerA_rgb);     // TEXCOORD1 → triangle corner A colour
+            mesh.SetUVs(2, cornerB_rgb);     // TEXCOORD2 → triangle corner B colour
+            mesh.SetUVs(3, cornerC_rgb);     // TEXCOORD3 → triangle corner C colour
             mesh.RecalculateNormals();
             mesh.RecalculateBounds();
             return mesh;
