@@ -60,6 +60,40 @@ namespace TerrainGrid
         // Null on flat chunks (they render the shared flat tile, no per-vertex tint).
         public int[] DualVertexPrimalIndex;
 
+        // --- Primal neighbour table (for road / building mesh construction) ---
+        //
+        // CSR layout describing, for each primal cell, every edge's two endpoint positions
+        // and which other primal cell (own chunk OR a neighbour chunk) lies across it.
+        // Built by TerrainModel.BuildPrimalNeighborTable after BuildDual / restore / add so
+        // cross-chunk neighbours are resolved using the same context the dual builder uses
+        // (LatticeKey lookup against currently loaded neighbour chunks).
+        //
+        // Shipped through DeepCopy onto the published mirror so the main thread can build
+        // road geometry (centroid → edge midpoint arms, connection bitmask from neighbouring
+        // chunks' TileProperties) without ever touching the worker-side primal graph (which
+        // DeepCopy drops, see comment near the bottom of this file).
+        //
+        // Index conventions per edge slot j ∈ [PrimalEdgeOffsets[i], PrimalEdgeOffsets[i+1]):
+        //   PrimalEdgeVertexA[j], PrimalEdgeVertexB[j]   — the two world-space endpoints
+        //     of the edge (mid = (A+B)/2, length = |B-A|, perp = (B-A)/length). Both
+        //     chunks sharing a seam edge see the same two positions, which is what makes
+        //     road arms meet exactly at the midpoint with matching widths.
+        //   (PrimalNeighborChunkDQ[j], PrimalNeighborChunkDR[j]) — axial offset of the
+        //     neighbouring chunk relative to this chunk's coord. (0,0) = same chunk.
+        //   PrimalNeighborPolyIdx[j] — index of the neighbour cell inside that chunk's
+        //     Polygons / TileProperties / PrimalCellCentroids arrays. -1 means the edge
+        //     is on the boundary of the loaded set (no neighbour chunk loaded at build
+        //     time, or chunk-seam edge where the neighbour couldn't be resolved). The
+        //     dual-complete cascade in BuildDual refreshes this when a neighbour appears.
+        //
+        // Null on flat chunks (they don't paint roads — they mount the shared flat tile).
+        public int[]     PrimalEdgeOffsets;
+        public Vector3[] PrimalEdgeVertexA;
+        public Vector3[] PrimalEdgeVertexB;
+        public int[]     PrimalNeighborChunkDQ;
+        public int[]     PrimalNeighborChunkDR;
+        public int[]     PrimalNeighborPolyIdx;
+
         public PrimalChunk(ChunkCoord coord, List<Polygon> polygons, VertexCollection verts)
         {
             Coord = coord;
@@ -133,6 +167,47 @@ namespace TerrainGrid
                 System.Array.Copy(TileProperties, tpCopy, TileProperties.Length);
             }
 
+            // Primal neighbour table — six blittable arrays (CSR offsets + two endpoint
+            // streams + three neighbour-reference streams). The main thread reads these to
+            // build road geometry; they share the same lifecycle as the other render arrays
+            // (refreshed every time the worker rebuilds the dual / restores / adds the chunk).
+            int[]     edgeOffCopy = null;
+            Vector3[] edgeACopy = null;
+            Vector3[] edgeBCopy = null;
+            int[]     neighDQCopy = null;
+            int[]     neighDRCopy = null;
+            int[]     neighIdxCopy = null;
+            if (PrimalEdgeOffsets != null)
+            {
+                edgeOffCopy = new int[PrimalEdgeOffsets.Length];
+                System.Array.Copy(PrimalEdgeOffsets, edgeOffCopy, PrimalEdgeOffsets.Length);
+            }
+            if (PrimalEdgeVertexA != null)
+            {
+                edgeACopy = new Vector3[PrimalEdgeVertexA.Length];
+                System.Array.Copy(PrimalEdgeVertexA, edgeACopy, PrimalEdgeVertexA.Length);
+            }
+            if (PrimalEdgeVertexB != null)
+            {
+                edgeBCopy = new Vector3[PrimalEdgeVertexB.Length];
+                System.Array.Copy(PrimalEdgeVertexB, edgeBCopy, PrimalEdgeVertexB.Length);
+            }
+            if (PrimalNeighborChunkDQ != null)
+            {
+                neighDQCopy = new int[PrimalNeighborChunkDQ.Length];
+                System.Array.Copy(PrimalNeighborChunkDQ, neighDQCopy, PrimalNeighborChunkDQ.Length);
+            }
+            if (PrimalNeighborChunkDR != null)
+            {
+                neighDRCopy = new int[PrimalNeighborChunkDR.Length];
+                System.Array.Copy(PrimalNeighborChunkDR, neighDRCopy, PrimalNeighborChunkDR.Length);
+            }
+            if (PrimalNeighborPolyIdx != null)
+            {
+                neighIdxCopy = new int[PrimalNeighborPolyIdx.Length];
+                System.Array.Copy(PrimalNeighborPolyIdx, neighIdxCopy, PrimalNeighborPolyIdx.Length);
+            }
+
             // Primal graph deliberately omitted (Polygons=null, Verts=null). Consumers must
             // null-check if they access them.
             return new PrimalChunk(Coord, null, null)
@@ -145,6 +220,12 @@ namespace TerrainGrid
                 PrimalCellCentroids = centroidsCopy,
                 DualVertexPrimalIndex = dvpiCopy,
                 TileProperties = tpCopy,
+                PrimalEdgeOffsets = edgeOffCopy,
+                PrimalEdgeVertexA = edgeACopy,
+                PrimalEdgeVertexB = edgeBCopy,
+                PrimalNeighborChunkDQ = neighDQCopy,
+                PrimalNeighborChunkDR = neighDRCopy,
+                PrimalNeighborPolyIdx = neighIdxCopy,
             };
         }
     }

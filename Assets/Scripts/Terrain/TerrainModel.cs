@@ -79,12 +79,76 @@ namespace TerrainGrid
                         chunk.TileProperties = new TileProperty[chunk.Polygons.Count];
                     chunk.TileProperties[polygonIndex] = value;
                     chunk.Version++;
+                    // Cross-chunk cascade. The road mesh on a neighbour chunk reads our
+                    // TileProperties to decide whether to extend an arm across the seam, so
+                    // if the painted cell touches a seam we must bump the neighbour chunks'
+                    // Versions to retrigger BuildRoadMesh on that side. Without this, the
+                    // first paint on each side of a seam wouldn't visually connect until
+                    // some unrelated change bumped the neighbour.
+                    BumpNeighborChunksForCellEdges(chunk, coord, polygonIndex);
                     return;
                 }
 
                 if (!pendingMutations.TryGetValue(coord, out List<TileMutation> list))
                     pendingMutations[coord] = list = new List<TileMutation>();
                 list.Add(new TileMutation { Coord = coord, PolygonIndex = polygonIndex, Value = value });
+            }
+        }
+
+        // For each cross-chunk edge of the painted cell, bump that neighbour chunk's
+        // Version. Precise path: walk the chunk's per-edge neighbour table built by
+        // BuildPrimalNeighborTable. Fallback (table null — e.g. a fresh chunk being
+        // painted before its first dual build): if any of the cell's primal vertices is on
+        // the chunk boundary, conservatively bump all 6 neighbour chunks. The fallback over-
+        // bumps but is correct; the precise path runs in steady state.
+        void BumpNeighborChunksForCellEdges(PrimalChunk chunk, ChunkCoord coord, int polygonIndex)
+        {
+            int[] offsets = chunk.PrimalEdgeOffsets;
+            int[] dqArr   = chunk.PrimalNeighborChunkDQ;
+            int[] drArr   = chunk.PrimalNeighborChunkDR;
+            int[] idxArr  = chunk.PrimalNeighborPolyIdx;
+
+            if (offsets != null && dqArr != null && drArr != null && idxArr != null
+                && polygonIndex + 1 < offsets.Length)
+            {
+                int eStart = offsets[polygonIndex];
+                int eEnd = offsets[polygonIndex + 1];
+                // Use a small bitset to coalesce repeated neighbour bumps within the cell.
+                // 6 neighbour chunks max — but tracking by (dq,dr) means we just dedupe
+                // through an inline list scan, no hashing needed.
+                int bumpCount = 0;
+                System.Span<int> dqBuf = stackalloc int[6];
+                System.Span<int> drBuf = stackalloc int[6];
+                for (int j = eStart; j < eEnd; j++)
+                {
+                    int dq = dqArr[j], dr = drArr[j];
+                    if (dq == 0 && dr == 0) continue;       // own-chunk edge
+                    if (idxArr[j] < 0) continue;            // unresolved seam
+                    bool dup = false;
+                    for (int k = 0; k < bumpCount; k++)
+                        if (dqBuf[k] == dq && drBuf[k] == dr) { dup = true; break; }
+                    if (dup) continue;
+                    if (bumpCount < dqBuf.Length) { dqBuf[bumpCount] = dq; drBuf[bumpCount] = dr; bumpCount++; }
+                    ChunkCoord nc = new ChunkCoord(coord.q + dq, coord.r + dr);
+                    if (chunks.TryGetValue(nc, out PrimalChunk nbChunk))
+                        nbChunk.Version++;
+                }
+                return;
+            }
+
+            // Fallback path: table not built yet. Bump all 6 neighbour chunks if the cell
+            // touches the chunk boundary (any vertex IsEdge). Cheap to check and correct
+            // in all cases — just less precise.
+            Polygon poly = chunk.Polygons != null && polygonIndex < chunk.Polygons.Count
+                ? chunk.Polygons[polygonIndex] : null;
+            if (poly == null) return;
+            bool onSeam = false;
+            foreach (Vertex v in poly.GetVertices()) if (v.IsEdge) { onSeam = true; break; }
+            if (!onSeam) return;
+            foreach (ChunkCoord nc in coord.HexesInRange(1))
+            {
+                if (nc == coord) continue;
+                if (chunks.TryGetValue(nc, out PrimalChunk nbChunk)) nbChunk.Version++;
             }
         }
 
@@ -117,6 +181,9 @@ namespace TerrainGrid
                     TileMutation m = list[i];
                     if (m.PolygonIndex < 0 || m.PolygonIndex >= chunk.Polygons.Count) continue;
                     chunk.TileProperties[m.PolygonIndex] = m.Value;
+                    // Cascade per painted cell so neighbour chunks rebuild their road mesh
+                    // and pick up cross-seam connections introduced by the replayed paints.
+                    BumpNeighborChunksForCellEdges(chunk, coord, m.PolygonIndex);
                 }
                 chunk.Version++;
             }
@@ -142,6 +209,11 @@ namespace TerrainGrid
         // streamer uses this in classification: anything that fails goes to parallel generation.
         // Cascades on promotion (cache or store): our 6 neighbours' duals may have been built
         // without us while we were away — they'll rebuild on the next BuildDual.
+        //
+        // Also (re)builds the chunk's primal neighbour table while we hold full neighbour
+        // context: store-restored chunks arrived without one, and cache-revived chunks had
+        // theirs frozen at soft-unload time so it may reference neighbours that have come or
+        // gone in the interim.
         public bool TryReactivate(ChunkCoord coord)
         {
             if (chunks.ContainsKey(coord)) return true;
@@ -150,6 +222,7 @@ namespace TerrainGrid
                 cache.Remove(coord);
                 chunks[coord] = cached;
                 InvalidateNeighborDualsOnAdd(coord);
+                BuildPrimalNeighborTable(coord);
                 ReplayPendingMutations(coord);
                 return true;
             }
@@ -157,6 +230,7 @@ namespace TerrainGrid
             {
                 chunks[coord] = ChunkSnapshot.Restore(coord, Store.Load(coord));
                 InvalidateNeighborDualsOnAdd(coord);
+                BuildPrimalNeighborTable(coord);
                 ReplayPendingMutations(coord);
                 return true;
             }
@@ -184,6 +258,11 @@ namespace TerrainGrid
         {
             chunks[chunk.Coord] = chunk;
             InvalidateNeighborDualsOnAdd(chunk.Coord);
+            // Build the chunk's primal neighbour table now that we hold the model lock and
+            // can see whatever neighbour chunks were loaded earlier in this same pass.
+            // Cross-chunk slots whose neighbour isn't loaded yet stay at -1; the dual cascade
+            // will rebuild this when a missing neighbour shows up (BuildDual end).
+            BuildPrimalNeighborTable(chunk.Coord);
             ReplayPendingMutations(chunk.Coord);
         }
 
@@ -406,7 +485,178 @@ namespace TerrainGrid
                 // skips invalidating complete neighbours, which makes camera-pan revisits free.
                 chunk.DualComplete = loadedNeighbors == 6;
             }
+
+            // Same context (loaded neighbour set) is exactly what BuildPrimalNeighborTable
+            // needs, so refresh the chunk's per-edge neighbour table now. If a neighbour
+            // shows up later, the dual cascade reinvalidates this chunk and brings us back
+            // here — keeping the table in sync with the dual.
+            BuildPrimalNeighborTable(coord);
+
             TerrainProfiler.IncDualsBuilt();
+        }
+
+        // Build the per-cell, per-edge neighbour table for the chunk. Each edge slot stores
+        // its two endpoint positions plus a reference to the cell across that edge: (0,0,i)
+        // for an in-chunk neighbour, (dq,dr,i) for a cell in a loaded neighbour chunk, or
+        // (0,0,-1) when the neighbour cell can't be resolved (chunk seam where no neighbour
+        // chunk is loaded). Consumed by ApplyTileMutation (cross-chunk Version cascade on
+        // paint) and by ChunkSurface.BuildRoadMesh (road arms connect through this).
+        //
+        // Worker-thread only; reads the model's `chunks` dict to resolve cross-chunk
+        // neighbours, so safe to call from anywhere the BuildDual pass runs (RunPass holds
+        // the world steady around these calls). Flat chunks skip — they don't paint roads.
+        public void BuildPrimalNeighborTable(ChunkCoord coord)
+        {
+            if (!chunks.TryGetValue(coord, out PrimalChunk chunk)) return;
+            if (chunk.IsFlat) return;
+            List<Polygon> polygons = chunk.Polygons;
+            if (polygons == null) return;
+
+            int cellCount = polygons.Count;
+            int totalEdges = 0;
+            for (int i = 0; i < cellCount; i++) totalEdges += polygons[i].GetVertices().Length;
+
+            int[]     offsets = new int[cellCount + 1];
+            Vector3[] vAarr  = new Vector3[totalEdges];
+            Vector3[] vBarr  = new Vector3[totalEdges];
+            int[]     dqArr  = new int[totalEdges];
+            int[]     drArr  = new int[totalEdges];
+            int[]     idxArr = new int[totalEdges];
+
+            // Own-chunk reverse map: Polygon → index. Built once, used to convert
+            // p.NeighborAtEdge(j) into an integer index when the neighbour is in-chunk.
+            var ownIndex = new Dictionary<Polygon, int>(cellCount);
+            for (int i = 0; i < cellCount; i++) ownIndex[polygons[i]] = i;
+
+            // Per-neighbour-chunk reverse edge map: (orderedLatticeKeyA, orderedLatticeKeyB)
+            // → polygon index in that chunk. Built once per neighbour, then probed per
+            // cross-chunk edge of the painted chunk. Cheap: ~50 cells × ~4 edges per
+            // neighbour, 6 neighbours, all dictionary work.
+            var neighborEdgeMaps = new Dictionary<ChunkCoord,
+                Dictionary<((int, int), (int, int)), int>>();
+            foreach (ChunkCoord nc in coord.HexesInRange(1))
+            {
+                if (nc == coord) continue;
+                if (!chunks.TryGetValue(nc, out PrimalChunk np)) continue;
+                if (np.IsFlat) continue;
+
+                var edgeMap = new Dictionary<((int, int), (int, int)), int>();
+                List<Polygon> npPolys = np.Polygons;
+                for (int pi = 0; pi < npPolys.Count; pi++)
+                {
+                    Vertex[] vs = npPolys[pi].GetVertices();
+                    int n = vs.Length;
+                    for (int j = 0; j < n; j++)
+                    {
+                        Vertex va = vs[j];
+                        Vertex vb = vs[(j + 1) % n];
+                        // Only edges with BOTH endpoints on the chunk boundary can lie on
+                        // a cross-chunk seam — interior edges can't match anything in
+                        // another chunk and would just clutter the map.
+                        if (!va.IsEdge || !vb.IsEdge) continue;
+                        (int, int) ka = PolygonGridGenerator.LatticeKey(va.Position, hexRadius);
+                        (int, int) kb = PolygonGridGenerator.LatticeKey(vb.Position, hexRadius);
+                        edgeMap[OrderedEdgeKey(ka, kb)] = pi;
+                    }
+                }
+                neighborEdgeMaps[nc] = edgeMap;
+            }
+
+            int cursor = 0;
+            for (int i = 0; i < cellCount; i++)
+            {
+                offsets[i] = cursor;
+                Polygon p = polygons[i];
+                Vertex[] verts = p.GetVertices();
+                int n = verts.Length;
+
+                for (int j = 0; j < n; j++)
+                {
+                    Vertex va = verts[j];
+                    Vertex vb = verts[(j + 1) % n];
+                    vAarr[cursor] = va.Position;
+                    vBarr[cursor] = vb.Position;
+
+                    // In-chunk neighbour across edge (va, vb): the unique polygon that
+                    // shares BOTH endpoints with `p`. Walk vertex.Polygons (always
+                    // populated by the Polygon ctor, on both fresh-generated and
+                    // snapshot-restored chunks) instead of p.GetNeighbors() — the latter
+                    // is set by ComputeNeighbors which Restore doesn't call.
+                    Polygon nb = null;
+                    foreach (Polygon cand in va.Polygons)
+                    {
+                        if (cand == p) continue;
+                        bool sharesVb = false;
+                        foreach (Polygon other in vb.Polygons)
+                            if (other == cand) { sharesVb = true; break; }
+                        if (sharesVb) { nb = cand; break; }
+                    }
+                    if (nb != null && ownIndex.TryGetValue(nb, out int nbIdx))
+                    {
+                        dqArr[cursor]  = 0;
+                        drArr[cursor]  = 0;
+                        idxArr[cursor] = nbIdx;
+                    }
+                    else
+                    {
+                        // Cross-chunk: resolve via lattice keys on the two endpoints. Look
+                        // in every loaded neighbour-chunk edge map for an entry with the
+                        // exact same undirected key.
+                        int foundIdx = -1;
+                        ChunkCoord foundCoord = default;
+                        if (va.IsEdge && vb.IsEdge)
+                        {
+                            (int, int) ka = PolygonGridGenerator.LatticeKey(va.Position, hexRadius);
+                            (int, int) kb = PolygonGridGenerator.LatticeKey(vb.Position, hexRadius);
+                            var key = OrderedEdgeKey(ka, kb);
+                            foreach (var kv in neighborEdgeMaps)
+                            {
+                                if (kv.Value.TryGetValue(key, out int hit))
+                                {
+                                    foundIdx = hit;
+                                    foundCoord = kv.Key;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (foundIdx >= 0)
+                        {
+                            dqArr[cursor]  = foundCoord.q - coord.q;
+                            drArr[cursor]  = foundCoord.r - coord.r;
+                            idxArr[cursor] = foundIdx;
+                        }
+                        else
+                        {
+                            // No neighbour loaded right now (or interior boundary).
+                            // BuildPrimalNeighborTable will be re-run when something
+                            // changes (dual cascade, neighbour add) and may resolve.
+                            dqArr[cursor]  = 0;
+                            drArr[cursor]  = 0;
+                            idxArr[cursor] = -1;
+                        }
+                    }
+                    cursor++;
+                }
+            }
+            offsets[cellCount] = cursor;
+
+            chunk.PrimalEdgeOffsets      = offsets;
+            chunk.PrimalEdgeVertexA      = vAarr;
+            chunk.PrimalEdgeVertexB      = vBarr;
+            chunk.PrimalNeighborChunkDQ  = dqArr;
+            chunk.PrimalNeighborChunkDR  = drArr;
+            chunk.PrimalNeighborPolyIdx  = idxArr;
+        }
+
+        // Order-independent key for an undirected edge whose endpoints are lattice keys —
+        // mirrors PolygonGridGenerator.EdgeKey but on rounded integer coords, so a chunk's
+        // seam edge produces the SAME key as the matching edge from the chunk across the
+        // seam regardless of which winding each side traversed it in.
+        static ((int, int), (int, int)) OrderedEdgeKey((int, int) a, (int, int) b)
+        {
+            bool aFirst = a.Item1 < b.Item1 || (a.Item1 == b.Item1 && a.Item2 < b.Item2);
+            return aFirst ? (a, b) : (b, a);
         }
 
         // Unconditional cascade. Used by RelaxBorders, where the chunk's primal actually moved

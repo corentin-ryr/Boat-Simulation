@@ -20,6 +20,11 @@ namespace Player
         public GameObject playerPrefab;
         public ChunkManager chunkManager;
         public PlayerCamera playerCamera;
+        [Tooltip("Optional. If set, the spawner forwards the freshly-instantiated " +
+                 "PlayerController and PlayerCamera's GameObject onto this mode " +
+                 "controller — same pattern used to hand the camera anchor to " +
+                 "ChunkManager. Leave null if the scene has no GameModeController.")]
+        public GameModeController gameModeController;
 
         [Header("Spawn")]
         [Tooltip("Optional override. If null, spawns at this GameObject's position.")]
@@ -57,6 +62,21 @@ namespace Player
             }
             if (chunkManager != null)
                 chunkManager.cameraTarget = anchor;
+
+            // Hand the freshly-spawned avatar + its camera to the mode controller
+            // so Tab-toggling can disable them in RTS mode. Mirrors the existing
+            // chunkManager.cameraTarget hand-off above: spawn-time wiring of a
+            // scene-level controller that needs scene-instance references it can't
+            // get from the prefab. The spawner also captures the gameplay
+            // streaming anchor (the CameraAnchor we just gave ChunkManager) so the
+            // controller can swap back to it on a Tab press out of RTS mode.
+            if (gameModeController != null)
+            {
+                gameModeController.playerController = pc;
+                if (playerCamera != null)
+                    gameModeController.playerCameraGo = playerCamera.gameObject;
+                gameModeController.gameplayStreamingAnchor = anchor;
+            }
         }
     }
 }

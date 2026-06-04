@@ -175,17 +175,18 @@ MonoBehaviour:
   presenceCacheSize: 64
   cameraTarget: {fileID: 964026443}
   groundMaterial: {fileID: 2100000, guid: 35df79913566d412aa02b4075a7fcbfc, type: 2}
+  roadMaterial: {fileID: 2100000, guid: 77f1618197f44cc4a2e2129163aa639c, type: 2}
   elevation:
     octaves: 5
     baseFrequency: 0.001
     lacunarity: 2
     gain: 0.5
     threshold: 0
-    beachBand: 0.05
+    beachBand: 0
     heightScale: 100
     seabedDepth: 10
     seed: 1337
-  showPrimalGizmos: 0
+  showPrimalGizmos: 1
   primalGizmoColor: {r: 0.3, g: 0.8, b: 1, a: 1}
   edgeVertexColor: {r: 1, g: 0.3, b: 0.3, a: 1}
   edgeVertexSize: 0.04
@@ -720,6 +721,59 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &2090560429
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 2090560431}
+  - component: {fileID: 2090560430}
+  m_Layer: 0
+  m_Name: TilePainter
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &2090560430
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2090560429}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d675e6a1246d14edfb2de3751e0b12f1, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::TerrainGrid.TilePainter
+  chunkManager: {fileID: 66286119}
+  cam: {fileID: 0}
+  terrainMask:
+    serializedVersion: 2
+    m_Bits: 4294967295
+  maxDistance: 500
+  paintMouseButton: 0
+  cycleKey: 116
+  drawHud: 1
+--- !u!4 &2090560431
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2090560429}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 74.09129, y: -0, z: 13.56776}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0
@@ -731,3 +785,4 @@ SceneRoots:
   - {fileID: 576734569}
   - {fileID: 964026443}
   - {fileID: 365901927}
+  - {fileID: 2090560431}

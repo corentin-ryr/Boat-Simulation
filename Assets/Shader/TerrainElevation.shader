@@ -81,6 +81,32 @@ Shader "Custom/TerrainElevation"
                 float  _AmbientBoost;
             CBUFFER_END
 
+            // ---- RTS hover uniforms ----
+            //
+            // Set by TileSelector (Shader.SetGlobalXxx) on cursor move:
+            //   _HoverPrimalIdx ∈ [0, chunkCellCount); -1 = nothing hovered
+            //   _HoverChunkQR    = the hovered chunk's (q, r) axial coord (.zw unused)
+            // Set by GameModeController on Tab toggle:
+            //   _HoverColor      = (rgb, a) tint blended over the hovered cell
+            // Set per renderer (MaterialPropertyBlock from ChunkSurface):
+            //   _ChunkQR         = THIS chunk's (q, r) coord; only chunks whose coord
+            //                      matches _HoverChunkQR participate in the hover tint
+            //                      (otherwise the same local index would tint cells in
+            //                      every chunk simultaneously).
+            //
+            // Living at global scope (outside UnityPerMaterial CBUFFER) so MPB overrides
+            // work cleanly and SetGlobal* targets a single shared backing. SRP Batcher
+            // compatibility is unaffected by globals; per-renderer MPB on _ChunkQR will
+            // break batching for terrain chunks, which is acceptable cost (~50 chunks
+            // around the camera at typical renderRadius).
+            //
+            // (Outline rendering does NOT live in this shader — see ChunkSurface
+            // BuildOutlineMesh for the per-chunk line-topology overlay.)
+            float  _HoverPrimalIdx;
+            float4 _HoverChunkQR;
+            float4 _HoverColor;
+            float4 _ChunkQR;
+
             struct Attributes
             {
                 float4 positionOS : POSITION;
@@ -96,19 +122,29 @@ Shader "Custom/TerrainElevation"
                 float3 cornerA     : TEXCOORD1;
                 float3 cornerB     : TEXCOORD2;
                 float3 cornerC     : TEXCOORD3;
+                // Per-triangle primal cell indices of the three corners. Same pattern
+                // as the corner colours — every vertex of a triangle carries the same
+                // triple, so interpolation leaves it constant across the fragment area.
+                // Used for the shader-side hover tint and per-cell outline detection
+                // (a fragment is "on a cell boundary" iff its two largest barycentric
+                // weights belong to corners with different primal indices). -1 means
+                // foreign corner (cross-chunk seam) — excluded from both hover and
+                // outline so cross-chunk seams don't draw spurious contours.
+                float3 cornerPrimal : TEXCOORD4;
             };
 
             struct Varyings
             {
-                float4 positionCS  : SV_POSITION;
-                float3 positionWS  : TEXCOORD0;
-                float3 normalWS    : TEXCOORD1;
-                float  fogFactor   : TEXCOORD2;
-                float3 barycentric : TEXCOORD3;
-                float3 cornerA     : TEXCOORD4;
-                float3 cornerB     : TEXCOORD5;
-                float3 cornerC     : TEXCOORD6;
-                float4 color       : COLOR;      // legacy pass-through (still consumed for flat tiles)
+                float4 positionCS   : SV_POSITION;
+                float3 positionWS   : TEXCOORD0;
+                float3 normalWS     : TEXCOORD1;
+                float  fogFactor    : TEXCOORD2;
+                float3 barycentric  : TEXCOORD3;
+                float3 cornerA      : TEXCOORD4;
+                float3 cornerB      : TEXCOORD5;
+                float3 cornerC      : TEXCOORD6;
+                float3 cornerPrimal : TEXCOORD7;
+                float4 color        : COLOR;      // legacy pass-through (still consumed for flat tiles)
             };
 
             Varyings Vert(Attributes IN)
@@ -116,15 +152,16 @@ Shader "Custom/TerrainElevation"
                 Varyings OUT;
                 VertexPositionInputs pos = GetVertexPositionInputs(IN.positionOS.xyz);
                 VertexNormalInputs   nrm = GetVertexNormalInputs(IN.normalOS);
-                OUT.positionCS  = pos.positionCS;
-                OUT.positionWS  = pos.positionWS;
-                OUT.normalWS    = nrm.normalWS;
-                OUT.fogFactor   = ComputeFogFactor(pos.positionCS.z);
-                OUT.color       = IN.color;
-                OUT.barycentric = IN.barycentric;
-                OUT.cornerA     = IN.cornerA;
-                OUT.cornerB     = IN.cornerB;
-                OUT.cornerC     = IN.cornerC;
+                OUT.positionCS   = pos.positionCS;
+                OUT.positionWS   = pos.positionWS;
+                OUT.normalWS     = nrm.normalWS;
+                OUT.fogFactor    = ComputeFogFactor(pos.positionCS.z);
+                OUT.color        = IN.color;
+                OUT.barycentric  = IN.barycentric;
+                OUT.cornerA      = IN.cornerA;
+                OUT.cornerB      = IN.cornerB;
+                OUT.cornerC      = IN.cornerC;
+                OUT.cornerPrimal = IN.cornerPrimal;
                 return OUT;
             }
 
@@ -167,12 +204,39 @@ Shader "Custom/TerrainElevation"
                 //     soft gradient that linear interpolation produced before. Multiplies
                 //     AFTER biome / slope so a painted road still reads slightly grassy on
                 //     grass and slightly rocky on a cliff.
+                //
+                //     Also captures which corner index won (0/1/2) so the hover tint
+                //     below uses the same nearest-neighbour decision.
                 float3 b = IN.barycentric;
+                int nearest;
                 float3 tileTint;
-                if (b.x >= b.y && b.x >= b.z) tileTint = IN.cornerA;
-                else if (b.y >= b.z)          tileTint = IN.cornerB;
-                else                          tileTint = IN.cornerC;
+                if (b.x >= b.y && b.x >= b.z)      { tileTint = IN.cornerA; nearest = 0; }
+                else if (b.y >= b.z)               { tileTint = IN.cornerB; nearest = 1; }
+                else                               { tileTint = IN.cornerC; nearest = 2; }
                 col *= tileTint;
+
+                // 2c) Hover tint — pixel-exact across the rendered cell footprint.
+                //     Fires only when (a) this fragment's nearest corner belongs to
+                //     the hovered primal cell index AND (b) this chunk's coord matches
+                //     the hovered chunk. The second test exists because primal indices
+                //     are local to each chunk: the same index 12 can mean different
+                //     cells in different chunks, so without the chunk gate we'd tint
+                //     cell 12 in every chunk on screen at once.
+                //
+                //     Outlines do NOT live in this shader anymore — barycentric Voronoi
+                //     bisectors form Y-shapes meeting at triangle centroids, not the
+                //     wedge perimeters players perceive as tile boundaries. The per-
+                //     chunk outline overlay built by ChunkSurface (line topology mesh
+                //     of V → M segments) handles outlines instead; it coincides
+                //     exactly with the wedge boundaries that BuildMesh emits.
+                float idxN = (nearest == 0) ? IN.cornerPrimal.x
+                          : (nearest == 1) ? IN.cornerPrimal.y
+                                           : IN.cornerPrimal.z;
+                bool chunkMatch = abs(_ChunkQR.x - _HoverChunkQR.x) < 0.5
+                               && abs(_ChunkQR.y - _HoverChunkQR.y) < 0.5;
+                bool idxMatch   = idxN >= 0.0 && abs(idxN - _HoverPrimalIdx) < 0.5;
+                bool hoverHere  = _HoverPrimalIdx >= 0.0 && chunkMatch && idxMatch;
+                col = lerp(col, _HoverColor.rgb, hoverHere ? _HoverColor.a : 0.0);
 
                 // 3) Standard URP lighting (main directional + soft ambient SH).
                 Light mainLight  = GetMainLight(TransformWorldToShadowCoord(IN.positionWS));

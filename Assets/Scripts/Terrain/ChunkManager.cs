@@ -41,7 +41,27 @@ namespace TerrainGrid
         public Transform cameraTarget;
 
         [Header("Rendering")]
+        [Tooltip("Material applied to the terrain mesh itself (the non-overlay base ground). " +
+                 "URP/Lit; the project's terrain shader expects per-vertex barycentric + " +
+                 "corner-colour UVs.")]
         public Material groundMaterial;
+
+        [Tooltip("Drives all paintable tile kinds — palette buttons, overlay materials, " +
+                 "placement rules, presenter pluggability. Drop a TileCatalog asset here. " +
+                 "Adding a new kind = author a new TileDefinition .asset and append it to " +
+                 "the catalog's `definitions` list; no edits to this MonoBehaviour or to " +
+                 "ChunkSurface required.")]
+        public TileCatalog tileCatalog;
+
+        [Header("RTS Highlights")]
+        [Tooltip("Colour blended over the cell under the cursor in RTS mode. Alpha controls " +
+                 "the blend strength (0.35 is a comfortable default). Pushed to the terrain " +
+                 "shader as the global _HoverColor uniform by GameModeController.")]
+        public Color hoverColor = new Color(1f, 0.95f, 0.2f, 0.35f);
+        [Tooltip("Material applied to the per-chunk outline overlay (line topology, drawn " +
+                 "in RTS mode only). URP/Unlit Color is appropriate. Unassigned → outlines " +
+                 "render magenta.")]
+        public Material outlineMaterial;
 
         [Header("Elevation")]
         [Tooltip("Tuning knobs for the pointwise terrain height field. Assigned to the static " +
@@ -66,6 +86,7 @@ namespace TerrainGrid
         // streaming consumers and collider needs on the surface. Available after Start().
         public TerrainStreamer Streamer => streamer;
         public ChunkSurface Surface => surface;
+        public TileCatalog Catalog => tileCatalog;
 
         // Read-only handle on the main-thread render mirror's view of a chunk. Lets gameplay
         // code (e.g. TilePainter) access published-side data — centroids for nearest-tile
@@ -115,7 +136,8 @@ namespace TerrainGrid
 
             // The surface owns the per-chunk GameObjects. We register our render mirror as a
             // primal source; other clients (SimulationManager) add their own mirrors.
-            surface = new ChunkSurface(transform, groundMaterial, hexRadius, chunkGridSize, presenceCacheSize);
+            surface = new ChunkSurface(transform, groundMaterial, outlineMaterial,
+                                       tileCatalog, hexRadius, chunkGridSize, presenceCacheSize);
             surface.AddPrimalSource(coord => renderModel.TryGet(coord, out PrimalChunk pc) ? pc : null);
 
             // Register as a render-ready consumer: the streamer loads our requested chunks plus a
@@ -196,22 +218,29 @@ namespace TerrainGrid
 
             if (showPrimalGizmos)
             {
+                Gizmos.color = primalGizmoColor;
                 foreach (ChunkCoord coord in renderModel.LoadedCoords)
                 {
                     if (!renderModel.TryGet(coord, out PrimalChunk primal)) continue;
-                    // Published render-mirror copies omit the primal graph (DeepCopy nulls it
-                    // out to avoid copying data no consumer reads). Primal gizmos are therefore
-                    // not visible on mirrored chunks — silently skip rather than NRE.
-                    if (primal.Polygons == null) continue;
 
-                    Gizmos.color = primalGizmoColor;
-                    foreach (Polygon p in primal.Polygons) DrawPolygon(p);
-
-                    Gizmos.color = edgeVertexColor;
-                    foreach (Polygon p in primal.Polygons)
-                        foreach (Vertex v in p.GetVertices())
-                            if (v.IsEdge) Gizmos.DrawSphere(v.Position, edgeVertexSize);
+                    // Published render-mirror copies omit the primal graph (DeepCopy nulls
+                    // Polygons / Verts — saves the dominant per-publish allocation cost).
+                    // Reconstruct primal cell outlines from the CSR neighbour-table arrays
+                    // instead: PrimalEdgeVertexA[j] → PrimalEdgeVertexB[j] is one primal
+                    // edge, and walking j over each cell's slot range
+                    // [PrimalEdgeOffsets[i] .. PrimalEdgeOffsets[i+1]) covers all of that
+                    // cell's boundary. Flat chunks ship no neighbour table — silently skip.
+                    Vector3[] vAs = primal.PrimalEdgeVertexA;
+                    Vector3[] vBs = primal.PrimalEdgeVertexB;
+                    if (vAs == null || vBs == null) continue;
+                    int n = Mathf.Min(vAs.Length, vBs.Length);
+                    for (int j = 0; j < n; j++) Gizmos.DrawLine(vAs[j], vBs[j]);
                 }
+                // edgeVertexColor / edgeVertexSize spheres were on per-Vertex IsEdge flags;
+                // those live on the primal graph that the mirror doesn't ship. Dropped here
+                // rather than re-shipping a parallel "is this primal vertex on the chunk
+                // border" array just for a gizmo — the cell-outline lines are the part
+                // worth seeing.
             }
 
             if (showDualGizmos && surface != null)

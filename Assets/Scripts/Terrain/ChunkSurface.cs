@@ -30,11 +30,11 @@ namespace TerrainGrid
     // thread on every camera-pan revisit. Overflow evicts FIFO; size bound is
     // `presenceCacheSize` (constructor argument).
     //
-    // Phase 2: for non-flat chunks the dual is built by the streamer worker (in parallel,
-    // alongside relaxation) and travels on the PrimalChunk through the publish pipeline. The
-    // surface no longer computes any polygon math — it just builds Unity Mesh objects from
-    // primal.Dual when the chunk's version changes. All cross-chunk lookups, ownership
-    // arbitration, and cascade invalidation happen on the worker thread.
+    // Catalog-driven overlays: each TileKind's visual is owned by a TilePresenter
+    // ScriptableObject (RoadPresenter, BuildingPresenter, etc., resolved through the
+    // TileCatalog). The surface iterates the catalog per Apply to rebuild stale overlays
+    // and tear down overlays whose chunk has dropped to zero cells of that kind. Adding a
+    // new tile kind = author a new Presenter + TileDefinition asset; no edits here.
     public class ChunkSurface
     {
         class Presence
@@ -46,13 +46,43 @@ namespace TerrainGrid
             public Mesh Mesh;           // owned per-presence mesh; null when using the shared flat tile
             public int MeshBuiltFromVersion = -1;
             public bool Flat;           // mode flag: true while sharedMesh == flatTile and GO is positioned
+
+            // Sparse per-kind overlay state. Sized lazily — only kinds that have ever
+            // had a cell in this chunk get a Handle entry. Owned by ChunkSurface;
+            // presenters mutate handle fields but don't keep their own references.
+            public readonly Dictionary<TileKind, ChunkOverlayHandle> Overlays =
+                new Dictionary<TileKind, ChunkOverlayHandle>();
+
+            // Outline overlay: a child GameObject under `Go` carrying a line-topology
+            // Mesh that traces every dual cell's wedge perimeter via V → M segments
+            // per dual polygon edge. Not a per-tile overlay — it's a global RTS-mode
+            // decorator over the whole terrain, so it stays separate from the catalog
+            // path. Lazily instantiated, version-gated, visibility tracks ShowOutlines.
+            public GameObject OutlineGo;
+            public MeshFilter OutlineMf;
+            public MeshRenderer OutlineMr;
+            public Mesh OutlineMesh;
+            public int OutlineBuiltFromVersion = -1;
         }
 
         readonly Transform parent;
         readonly Material material;
+        readonly Material outlineMaterial;
+        readonly TileCatalog catalog;
         readonly float hexRadius;
         readonly int chunkGridSize;
         readonly int presenceCacheSize;
+
+        // Global outline visibility. GameModeController flips this on Tab; the
+        // next Apply() pushes it into every per-chunk OutlineMr.enabled. Public
+        // so the controller can also call RequestOutlineRefresh() to make the
+        // change visible on the same frame.
+        public static bool ShowOutlines = false;
+
+        // Reused scratch MaterialPropertyBlock for setting per-chunk shader
+        // uniforms (_ChunkQR) on each terrain MeshRenderer.
+        readonly MaterialPropertyBlock chunkMpb = new MaterialPropertyBlock();
+        static readonly int ChunkQRId = Shader.PropertyToID("_ChunkQR");
 
         readonly List<Func<ChunkCoord, PrimalChunk>> primalSources = new();
         readonly Dictionary<object, HashSet<ChunkCoord>> renderRequests = new();
@@ -60,25 +90,26 @@ namespace TerrainGrid
         readonly Dictionary<ChunkCoord, Presence> presences = new();
 
         // Warm cache: inactive GameObjects whose underlying chunk left the wanted set.
-        // FIFO eviction (`cacheOrder` may contain stale entries — promoted-out coords — that
-        // are skipped during TrimCache).
         readonly Dictionary<ChunkCoord, Presence> cache = new();
         readonly Queue<ChunkCoord> cacheOrder = new();
 
-        Mesh flatTile; // lazy — one shared Mesh covering a single chunk's hex footprint at Y=0
+        Mesh flatTile;
 
-        public ChunkSurface(Transform parent, Material material, float hexRadius, int chunkGridSize,
+        public ChunkSurface(Transform parent, Material material, Material outlineMaterial,
+                            TileCatalog catalog,
+                            float hexRadius, int chunkGridSize,
                             int presenceCacheSize = 64)
         {
             this.parent = parent;
             this.material = material;
+            this.outlineMaterial = outlineMaterial;
+            this.catalog = catalog;
             this.hexRadius = hexRadius;
             this.chunkGridSize = chunkGridSize;
             this.presenceCacheSize = Mathf.Max(0, presenceCacheSize);
         }
 
-        // For debug gizmos: the cached duals of every presented chunk's primal. Flat chunks
-        // expose their empty sentinel Dual, which yields nothing visible — correct.
+        // For debug gizmos: the cached duals of every presented chunk's primal.
         public IEnumerable<List<Polygon>> DualPolygons
         {
             get
@@ -99,14 +130,12 @@ namespace TerrainGrid
             if (source != null) primalSources.Add(source);
         }
 
-        // Replace this client's render set. Pass null to clear.
         public void SetRenderRequest(object client, IEnumerable<ChunkCoord> coords)
         {
             if (coords == null) renderRequests.Remove(client);
             else renderRequests[client] = new HashSet<ChunkCoord>(coords);
         }
 
-        // Replace this client's collider set. Pass null to clear.
         public void SetColliderRequest(object client, IEnumerable<ChunkCoord> coords)
         {
             if (coords == null) colliderRequests.Remove(client);
@@ -125,9 +154,6 @@ namespace TerrainGrid
             HashSet<ChunkCoord> wanted = new HashSet<ChunkCoord>(renderUnion);
             wanted.UnionWith(colliderUnion);
 
-            // Move now-unwanted presences into the warm cache (or destroy if the cache is
-            // disabled). They stay in the scene as inactive GameObjects, ready for a free
-            // revival on the next camera pan that brings them back into view.
             using (TerrainProfiler.Measure(TerrainProfiler.Phase.ApplyPark))
             {
                 foreach (ChunkCoord coord in presences.Keys.Where(c => !wanted.Contains(c)).ToList())
@@ -140,15 +166,11 @@ namespace TerrainGrid
                     EnsurePresence(coord, renderUnion.Contains(coord), colliderUnion.Contains(coord));
             }
 
-            // FIFO trim of the cache to the configured bound. Cheap when under threshold;
-            // skips stale entries that were already promoted out.
             using (TerrainProfiler.Measure(TerrainProfiler.Phase.ApplyTrim))
                 TrimCache();
 
             using (TerrainProfiler.Measure(TerrainProfiler.Phase.ApplyCount))
             {
-                // Live counts for the stats overlay. GetIndexCount is allocation-free (unlike
-                // `mesh.triangles.Length`, which materializes a fresh int[] every call).
                 TerrainProfiler.Presences = presences.Count;
                 TerrainProfiler.PresencesCached = cache.Count;
                 int liveTris = 0;
@@ -165,19 +187,13 @@ namespace TerrainGrid
         {
             PrimalChunk primal = LookupPrimal(coord);
             if (primal == null) return;
-            // Non-flat chunks need their dual built before we can mesh them; flat chunks use
-            // the shared tile and don't depend on Dual at all.
             if (!primal.IsFlat && primal.Dual == null) return;
 
             if (!presences.TryGetValue(coord, out Presence p))
             {
-                // Cache check before fresh allocation: a chunk that was parked while still
-                // sharing the current primal Version revives with no mesh work at all — just
-                // a SetActive flip and (maybe) toggling renderer/collider components.
                 if (cache.TryGetValue(coord, out p))
                 {
                     cache.Remove(coord);
-                    // stale entry in cacheOrder is harmless; TrimCache will skip it.
                     p.Go.SetActive(true);
                 }
                 else
@@ -193,20 +209,12 @@ namespace TerrainGrid
                 presences[coord] = p;
             }
 
-            // Pick the mesh source for this presence. Flat → shared tile (one allocation for
-            // the entire world). Non-flat → per-chunk mesh built from the dual, rebuilt when
-            // the chunk's Version moves.
+            // ---- Terrain mesh (flat fast path vs. per-chunk dual mesh) ----
             Mesh activeMesh;
             if (primal.IsFlat)
             {
                 if (!p.Flat)
                 {
-                    // Switch to flat mode: release any per-chunk mesh, position the GameObject at
-                    // the chunk's world center (the shared tile is in local space around origin).
-                    // Drop the GameObject by SeabedY so the shared tile sits at the seabed level
-                    // — the dual mesh path bakes Y per-vertex via Elevation.Sample, but the
-                    // flat-tile path uses one shared mesh whose verts are pinned at local Y=0,
-                    // so the depth has to come from the transform.
                     if (p.Mesh != null) { UnityEngine.Object.Destroy(p.Mesh); p.Mesh = null; }
                     Vector3 flatCenter = coord.WorldCenter(hexRadius, chunkGridSize);
                     flatCenter.y = Elevation.SeabedY;
@@ -222,19 +230,12 @@ namespace TerrainGrid
             {
                 if (p.Flat)
                 {
-                    // Switch back to per-chunk mode: reset transform; the dual mesh is in world
-                    // coords. Force a rebuild on the next version check.
                     p.Go.transform.localPosition = Vector3.zero;
                     p.Mf.sharedMesh = null;
                     p.Flat = false;
                     p.MeshBuiltFromVersion = -1;
                 }
 
-                // Rebuild the Unity Mesh only when the chunk's version moves. Version covers
-                // both primal changes (relaxation moved vertices) and dual changes (a neighbour
-                // cascade invalidated our cell ownership) — both bump Version on the worker.
-                // This is also the fast path for warm-cache revivals: if the cached presence
-                // still matches the primal's Version, we skip BuildMesh + ColliderCook entirely.
                 if (p.MeshBuiltFromVersion != primal.Version)
                 {
                     if (p.Mesh != null) UnityEngine.Object.Destroy(p.Mesh);
@@ -244,7 +245,7 @@ namespace TerrainGrid
                         p.Mf.sharedMesh = p.Mesh;
                     if (p.Mc != null)
                         using (TerrainProfiler.Measure(TerrainProfiler.Phase.ColliderCook))
-                            p.Mc.sharedMesh = p.Mesh; // collider needs to re-cook
+                            p.Mc.sharedMesh = p.Mesh;
                     p.MeshBuiltFromVersion = primal.Version;
                     TerrainProfiler.IncMeshRebuilds();
                     if (p.Mesh != null) TerrainProfiler.AddTrianglesBuilt((int)(p.Mesh.GetIndexCount(0) / 3));
@@ -256,6 +257,14 @@ namespace TerrainGrid
             {
                 p.Mr = p.Go.AddComponent<MeshRenderer>();
                 p.Mr.sharedMaterial = material;
+                // Stamp the chunk's axial coord onto the renderer via MPB so the
+                // shader can compare against the hovered chunk and only tint cells
+                // in the correct chunk. Set once at attach time — coord doesn't
+                // change for the renderer's lifetime. Breaks SRP batching for
+                // terrain (acceptable: ~50 visible chunks).
+                chunkMpb.Clear();
+                chunkMpb.SetVector(ChunkQRId, new Vector4(coord.q, coord.r, 0f, 0f));
+                p.Mr.SetPropertyBlock(chunkMpb);
             }
             else if (!wantRender && p.Mr != null)
             {
@@ -275,10 +284,106 @@ namespace TerrainGrid
                 UnityEngine.Object.Destroy(p.Mc);
                 p.Mc = null;
             }
+
+            // ---- Per-kind overlays (catalog-driven) ----
+            //
+            // Flat chunks skip — they mount the shared flat tile, can't host paintable
+            // land tiles, and don't ship a primal neighbour table to read from. We also
+            // tear down every overlay when wantRender drops (collider-only consumer),
+            // matching the prior Road/Building behaviour.
+            if (catalog != null && !primal.IsFlat)
+            {
+                if (wantRender)
+                {
+                    foreach (TileDefinition def in catalog.Definitions)
+                    {
+                        if (def == null || def.presenter == null) continue;
+
+                        if (!p.Overlays.TryGetValue(def.kind, out ChunkOverlayHandle handle))
+                        {
+                            handle = new ChunkOverlayHandle();
+                            p.Overlays[def.kind] = handle;
+                        }
+
+                        PresenterContext ctx = new PresenterContext(
+                            coord, primal, def.kind, p.Go.transform,
+                            def.material, handle, LookupPrimal,
+                            $"{def.displayName}Overlay");
+                        bool hasAny = def.presenter.Rebuild(in ctx);
+
+                        // Collider lifecycle: presenters that report RequiresCollider get a
+                        // MeshCollider attached on the overlay GO when both wantCollider AND
+                        // hasAny hold. Tear down otherwise — the prior Road/Building code did
+                        // the same dance.
+                        if (def.presenter.RequiresCollider && hasAny && wantCollider
+                            && handle.Go != null && handle.Mesh != null)
+                        {
+                            if (handle.Mc == null)
+                            {
+                                handle.Mc = handle.Go.AddComponent<MeshCollider>();
+                                using (TerrainProfiler.Measure(TerrainProfiler.Phase.ColliderCook))
+                                    handle.Mc.sharedMesh = handle.Mesh;
+                                TerrainProfiler.IncColliderAssigns();
+                            }
+                            else if (handle.Mc.sharedMesh != handle.Mesh)
+                            {
+                                using (TerrainProfiler.Measure(TerrainProfiler.Phase.ColliderCook))
+                                    handle.Mc.sharedMesh = handle.Mesh;
+                            }
+                        }
+                        else if (handle.Mc != null)
+                        {
+                            UnityEngine.Object.Destroy(handle.Mc);
+                            handle.Mc = null;
+                        }
+                    }
+                }
+                else
+                {
+                    // Collider-only / off-screen: tear down every overlay's GO so the warm
+                    // cache doesn't pin GPU meshes for chunks that aren't drawn anyway.
+                    foreach (KeyValuePair<TileKind, ChunkOverlayHandle> kv in p.Overlays)
+                    {
+                        TileDefinition def = catalog.Get(kv.Key);
+                        def?.presenter?.DestroyOverlay(kv.Value);
+                    }
+                }
+            }
+
+            // ---- Outline overlay ----
+            if (!primal.IsFlat && wantRender)
+            {
+                if (p.OutlineGo == null)
+                {
+                    p.OutlineGo = new GameObject("OutlineOverlay");
+                    p.OutlineGo.transform.SetParent(p.Go.transform, false);
+                    p.OutlineMf = p.OutlineGo.AddComponent<MeshFilter>();
+                    p.OutlineMr = p.OutlineGo.AddComponent<MeshRenderer>();
+                    p.OutlineMr.sharedMaterial = outlineMaterial;
+                    p.OutlineMr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+                    p.OutlineMr.receiveShadows = false;
+                    p.OutlineMesh = new Mesh
+                    {
+                        name = $"OutlineMesh {coord}",
+                        indexFormat = UnityEngine.Rendering.IndexFormat.UInt32,
+                    };
+                    p.OutlineMf.sharedMesh = p.OutlineMesh;
+                }
+
+                if (p.OutlineBuiltFromVersion != primal.Version)
+                {
+                    BuildOutlineMesh(primal, p.OutlineMesh);
+                    p.OutlineBuiltFromVersion = primal.Version;
+                }
+
+                p.OutlineMr.enabled = ShowOutlines;
+            }
+            else if (!wantRender && p.OutlineGo != null)
+            {
+                DestroyOutlineOverlay(p);
+            }
         }
 
-        // Park a presence in the warm cache (SetActive(false), keep all components and mesh
-        // intact). If the cache is disabled (size 0), destroy immediately — same as before.
         void ParkPresence(ChunkCoord coord)
         {
             if (!presences.TryGetValue(coord, out Presence p)) return;
@@ -290,8 +395,6 @@ namespace TerrainGrid
                 return;
             }
 
-            // If a stale cache entry exists for this coord (shouldn't normally happen — coord
-            // was in presences — but defensive), free it first.
             if (cache.TryGetValue(coord, out Presence existing))
             {
                 cache.Remove(coord);
@@ -303,25 +406,41 @@ namespace TerrainGrid
             cacheOrder.Enqueue(coord);
         }
 
-        // FIFO eviction down to presenceCacheSize. Stale queue entries (promoted-out coords)
-        // are skipped, matching the streamer's TrimCache pattern.
         void TrimCache()
         {
             while (cache.Count > presenceCacheSize && cacheOrder.Count > 0)
             {
                 ChunkCoord coord = cacheOrder.Dequeue();
-                if (!cache.TryGetValue(coord, out Presence p)) continue; // promoted out
+                if (!cache.TryGetValue(coord, out Presence p)) continue;
                 cache.Remove(coord);
                 DestroyPresenceObjects(p);
             }
         }
 
-        // Tear down the Unity objects backing a presence. The Mesh (when per-chunk, not the
-        // shared flat tile) is a separate Unity asset that survives GameObject destruction,
-        // so we Destroy it explicitly.
-        static void DestroyPresenceObjects(Presence p)
+        // Tear down the Unity objects backing a presence. Mesh assets survive
+        // GameObject destruction, so each Mesh is destroyed explicitly. Catalog
+        // overlays are routed through each presenter's DestroyOverlay so a
+        // future presenter with non-trivial cleanup gets called correctly.
+        void DestroyPresenceObjects(Presence p)
         {
             if (p.Mesh != null) UnityEngine.Object.Destroy(p.Mesh);
+            if (p.OutlineMesh != null) UnityEngine.Object.Destroy(p.OutlineMesh);
+            if (catalog != null)
+            {
+                foreach (KeyValuePair<TileKind, ChunkOverlayHandle> kv in p.Overlays)
+                {
+                    TileDefinition def = catalog.Get(kv.Key);
+                    if (def?.presenter != null) def.presenter.DestroyOverlay(kv.Value);
+                    else
+                    {
+                        // Catalog changed mid-session; fall back to manual cleanup so the
+                        // mesh asset doesn't leak.
+                        if (kv.Value.Mesh != null) UnityEngine.Object.Destroy(kv.Value.Mesh);
+                        if (kv.Value.Go != null) UnityEngine.Object.Destroy(kv.Value.Go);
+                    }
+                }
+            }
+            p.Overlays.Clear();
             if (p.Go != null) UnityEngine.Object.Destroy(p.Go);
         }
 
@@ -356,158 +475,130 @@ namespace TerrainGrid
 
         // Single shared flat-ocean tile: a regular flat-top hexagon at the origin in local
         // space, circumradius = chunkGridSize · hexRadius (matches a chunk's footprint). Built
-        // once, reused by every flat chunk's GameObject — one Mesh allocation and one
-        // MeshCollider cook for potentially thousands of distant-ocean chunks.
+        // once, reused by every flat chunk's GameObject.
         Mesh GetFlatTile()
         {
             if (flatTile != null) return flatTile;
-
             float R = hexRadius * chunkGridSize;
             float h = Mathf.Sqrt(3f) / 2f;
             Vector3[] verts =
             {
-                new Vector3( R,       0f,  0f      ),
-                new Vector3( R * 0.5f, 0f,  R * h  ),
-                new Vector3(-R * 0.5f, 0f,  R * h  ),
-                new Vector3(-R,       0f,  0f      ),
-                new Vector3(-R * 0.5f, 0f, -R * h  ),
-                new Vector3( R * 0.5f, 0f, -R * h  ),
+                new Vector3( R,        0f,  0f      ),
+                new Vector3( R * 0.5f, 0f,  R * h   ),
+                new Vector3(-R * 0.5f, 0f,  R * h   ),
+                new Vector3(-R,        0f,  0f      ),
+                new Vector3(-R * 0.5f, 0f, -R * h   ),
+                new Vector3( R * 0.5f, 0f, -R * h   ),
             };
-            // Triangle fan from v0; winding matches BuildMesh's convention so the front face
-            // points up (same as the dual mesh, so the shared material renders identically).
-            int[] tris =
-            {
-                0, 2, 1,
-                0, 3, 2,
-                0, 4, 3,
-                0, 5, 4,
-            };
-
+            int[] tris = { 0, 2, 1,  0, 3, 2,  0, 4, 3,  0, 5, 4 };
             flatTile = new Mesh { name = "ChunkFlatTile", vertices = verts, triangles = tris };
             flatTile.RecalculateNormals();
             flatTile.RecalculateBounds();
             return flatTile;
         }
 
-        // Static palette mapping a TileKind to its vertex-colour multiplier. Neutral white
-        // is the no-op multiply, so untouched cells render exactly as before. Painted kinds
-        // shift the base hue without dimming it too aggressively (alpha=255 for all). The
-        // sentinel entry at index `kindCount` covers neighbour-chunk corners (primal index
-        // -1) — same neutral as Default so unowned border vertices blend invisibly.
-        static readonly Color32[] TileKindPalette =
-        {
-            new Color32(255, 255, 255, 255), // Default — neutral, base colour unchanged
-            new Color32(160, 150, 135, 255), // Road    — warm grey
-            new Color32(210, 120, 110, 255), // Building — soft red
-            new Color32(255, 255, 255, 255), // [-1 sentinel] — no owning primal, neutral
-        };
-        static readonly int PaletteNeutralIndex = TileKindPalette.Length - 1;
-
-        static Color32 ColorFor(int primalIdx, TileProperty[] tp)
-        {
-            if (primalIdx < 0 || tp == null || primalIdx >= tp.Length)
-                return TileKindPalette[PaletteNeutralIndex];
-            int kind = (int)tp[primalIdx].Kind;
-            if ((uint)kind >= (uint)PaletteNeutralIndex) return TileKindPalette[PaletteNeutralIndex];
-            return TileKindPalette[kind];
-        }
-
-        // RGB components of a palette entry, packed for upload as a UV channel. Alpha is
-        // dropped since the shader only multiplies RGB; this also keeps the channel as a
-        // Vector3 instead of Vector4.
-        static Vector3 ColorRgb(Color32 c) => new Vector3(c.r / 255f, c.g / 255f, c.b / 255f);
-
-        static Mesh BuildMesh(PrimalChunk primal)
+        // ----------------- Terrain mesh (per-corner wedge decomposition) -----------------
+        //
+        // Walks each dual polygon and emits the wedge of every non-carved corner. A corner
+        // is "carved" if its owning primal cell's kind has TileDefinition.carvesTerrain
+        // set — in which case the kind's presenter paints the wedge instead. Carved
+        // wedges (Road / Building / Field today) are skipped; non-carved wedges
+        // (Default + Market / Lighthouse / Dock) are emitted with a neutral white tint
+        // so the structure rendered on top sits over visible ground.
+        //
+        // Vertices are unshared per triangle so the shader can compute nearest-corner
+        // barycentric tinting from the (cornerA, cornerB, cornerC) triple. Today every
+        // wedge uses a degenerate triple (all same colour, all same primal index) since
+        // we paint the whole wedge in one hue — leaves room for cross-corner gradients
+        // if we ever want them.
+        Mesh BuildMesh(PrimalChunk primal)
         {
             List<Polygon> polygons = primal.Dual;
-            int[] dvpi = primal.DualVertexPrimalIndex;          // corner → primal cell index (or -1)
-            TileProperty[] tp = primal.TileProperties;          // null = all Default → all neutral
+            int[] dvpi = primal.DualVertexPrimalIndex;
+            TileProperty[] tp = primal.TileProperties;
 
-            // We unshare vertices per TRIANGLE so the fragment shader can compute nearest
-            // neighbour across the triangle's three primal corners. Each emitted vertex
-            // carries the same (cA, cB, cC) triple of corner colours plus a barycentric
-            // identifier (which of the three I am). After linear interpolation in the
-            // pipeline, the fragment sees a constant (cA, cB, cC) and a per-pixel barycentric
-            // weighting; it picks whichever corner has the largest weight. Result: each
-            // primal-Voronoi region of the triangle takes its owning cell's palette colour
-            // with a sharp edge along the bisectors.
-            //
-            // Storage cost: a polygon with N corners has (N-2) triangles, each with 3 unique
-            // vertices → 3·(N-2) verts where the shared-fan version had N. For typical
-            // dual quads (N=4) this is 1.5× the vertex count; for hexagonal-ish duals (N=6)
-            // it's 2×. Triangle and index counts are unchanged.
-            var vertices    = new List<Vector3>();
-            var triangles   = new List<int>();
-            var colors      = new List<Color32>();   // per-vertex own colour (back-compat / fallback)
-            var barycentric = new List<Vector3>();   // (1,0,0), (0,1,0), (0,0,1) per triangle vertex
-            var cornerA_rgb = new List<Vector3>();   // all three identical per triangle, so each
-            var cornerB_rgb = new List<Vector3>();   // vertex in the triangle outputs the same triple
+            var vertices = new List<Vector3>();
+            var triangles = new List<int>();
+            var colors = new List<Color32>();
+            var barycentric = new List<Vector3>();
+            var cornerA_rgb = new List<Vector3>();
+            var cornerB_rgb = new List<Vector3>();
             var cornerC_rgb = new List<Vector3>();
+            var cornerPrimal = new List<Vector3>();
 
-            int cornerCursor = 0;   // index into dvpi; advances by each polygon's corner count
-            foreach (Polygon p in polygons)
+            // The terrain wedge tint is currently constant — structures paint themselves
+            // and area presenters carve, so there's no need for per-kind base colour.
+            // Reserved for future "tint terrain under a structure" extensions.
+            Color32 neutral = new Color32(255, 255, 255, 255);
+            Vector3 neutralRgb = new Vector3(1f, 1f, 1f);
+
+            int cornerCursor = 0;
+            foreach (Polygon poly in polygons)
             {
-                Vector3[] verts = p.GetVerticesPosition();
-                if (verts.Length < 3)
-                {
-                    // GenerateDual already skipped these, but if a legacy/restored dual still
-                    // contains one we must keep dvpi's cursor in sync with the corner walk.
-                    cornerCursor += verts.Length;
-                    continue;
-                }
+                Vector3[] verts = poly.GetVerticesPosition();
+                if (verts.Length < 3) { cornerCursor += verts.Length; continue; }
 
-                // Resolve every corner's palette colour up front so each fan triangle below
-                // can pick three of them without redoing the dvpi/tp lookups.
                 int n = verts.Length;
-                Color32[] cornerColors = new Color32[n];
+                int[] cornerPrimalIdx = new int[n];
+                bool[] cornerIsCarved = new bool[n];
                 for (int i = 0; i < n; i++)
                 {
                     int primalIdx = dvpi != null && cornerCursor + i < dvpi.Length
                         ? dvpi[cornerCursor + i] : -1;
-                    cornerColors[i] = ColorFor(primalIdx, tp);
+                    cornerPrimalIdx[i] = primalIdx;
+                    bool carved = false;
+                    if (primalIdx >= 0 && tp != null && primalIdx < tp.Length && catalog != null)
+                        carved = catalog.IsCarvingKind(tp[primalIdx].Kind);
+                    cornerIsCarved[i] = carved;
                 }
                 cornerCursor += n;
 
-                // Triangle fan from corner 0: indices (0, i+1, i) for i = 1..n-2. We emit
-                // three NEW vertices per triangle; never sharing means each triangle's
-                // barycentric identification is self-contained.
-                for (int i = 1; i < n - 1; i++)
-                {
-                    int idxA = 0;
-                    int idxB = i + 1;
-                    int idxC = i;
+                Vector3 V = Vector3.zero;
+                for (int i = 0; i < n; i++) V += verts[i];
+                V /= n;
 
-                    Color32 cA = cornerColors[idxA];
-                    Color32 cB = cornerColors[idxB];
-                    Color32 cC = cornerColors[idxC];
-                    Vector3 vA = ColorRgb(cA);
-                    Vector3 vB = ColorRgb(cB);
-                    Vector3 vC = ColorRgb(cC);
+                for (int i = 0; i < n; i++)
+                {
+                    if (cornerIsCarved[i]) continue;
+
+                    int iPrev = (i + n - 1) % n;
+                    int iNext = (i + 1) % n;
+                    Vector3 Mprev = 0.5f * (verts[iPrev] + verts[i]);
+                    Vector3 Mnext = 0.5f * (verts[i] + verts[iNext]);
+
+                    Vector3 baryA = new Vector3(1, 0, 0);
+                    Vector3 baryB = new Vector3(0, 1, 0);
+                    Vector3 baryC = new Vector3(0, 0, 1);
+                    int idx = cornerPrimalIdx[i];
+                    Vector3 vP = new Vector3(idx, idx, idx);
 
                     int baseIdx = vertices.Count;
-
-                    // Vertex A — owns barycentric (1,0,0)
-                    vertices.Add(verts[idxA]);
-                    colors.Add(cA);
-                    barycentric.Add(new Vector3(1, 0, 0));
-                    cornerA_rgb.Add(vA); cornerB_rgb.Add(vB); cornerC_rgb.Add(vC);
-
-                    // Vertex B — (0,1,0)
-                    vertices.Add(verts[idxB]);
-                    colors.Add(cB);
-                    barycentric.Add(new Vector3(0, 1, 0));
-                    cornerA_rgb.Add(vA); cornerB_rgb.Add(vB); cornerC_rgb.Add(vC);
-
-                    // Vertex C — (0,0,1)
-                    vertices.Add(verts[idxC]);
-                    colors.Add(cC);
-                    barycentric.Add(new Vector3(0, 0, 1));
-                    cornerA_rgb.Add(vA); cornerB_rgb.Add(vB); cornerC_rgb.Add(vC);
-
-                    // Same winding the legacy fan used: (0, i+1, i).
+                    vertices.Add(verts[i]); colors.Add(neutral); barycentric.Add(baryA);
+                    cornerA_rgb.Add(neutralRgb); cornerB_rgb.Add(neutralRgb); cornerC_rgb.Add(neutralRgb);
+                    cornerPrimal.Add(vP);
+                    vertices.Add(Mnext);    colors.Add(neutral); barycentric.Add(baryB);
+                    cornerA_rgb.Add(neutralRgb); cornerB_rgb.Add(neutralRgb); cornerC_rgb.Add(neutralRgb);
+                    cornerPrimal.Add(vP);
+                    vertices.Add(V);        colors.Add(neutral); barycentric.Add(baryC);
+                    cornerA_rgb.Add(neutralRgb); cornerB_rgb.Add(neutralRgb); cornerC_rgb.Add(neutralRgb);
+                    cornerPrimal.Add(vP);
                     triangles.Add(baseIdx);
                     triangles.Add(baseIdx + 1);
                     triangles.Add(baseIdx + 2);
+
+                    int baseIdx2 = vertices.Count;
+                    vertices.Add(verts[i]); colors.Add(neutral); barycentric.Add(baryA);
+                    cornerA_rgb.Add(neutralRgb); cornerB_rgb.Add(neutralRgb); cornerC_rgb.Add(neutralRgb);
+                    cornerPrimal.Add(vP);
+                    vertices.Add(Mprev);    colors.Add(neutral); barycentric.Add(baryB);
+                    cornerA_rgb.Add(neutralRgb); cornerB_rgb.Add(neutralRgb); cornerC_rgb.Add(neutralRgb);
+                    cornerPrimal.Add(vP);
+                    vertices.Add(V);        colors.Add(neutral); barycentric.Add(baryC);
+                    cornerA_rgb.Add(neutralRgb); cornerB_rgb.Add(neutralRgb); cornerC_rgb.Add(neutralRgb);
+                    cornerPrimal.Add(vP);
+                    triangles.Add(baseIdx2);
+                    triangles.Add(baseIdx2 + 1);
+                    triangles.Add(baseIdx2 + 2);
                 }
             }
 
@@ -518,13 +609,93 @@ namespace TerrainGrid
                 triangles = triangles.ToArray(),
                 colors32 = colors.ToArray(),
             };
-            mesh.SetUVs(0, barycentric);     // TEXCOORD0 → fragment barycentric
-            mesh.SetUVs(1, cornerA_rgb);     // TEXCOORD1 → triangle corner A colour
-            mesh.SetUVs(2, cornerB_rgb);     // TEXCOORD2 → triangle corner B colour
-            mesh.SetUVs(3, cornerC_rgb);     // TEXCOORD3 → triangle corner C colour
+            mesh.SetUVs(0, barycentric);
+            mesh.SetUVs(1, cornerA_rgb);
+            mesh.SetUVs(2, cornerB_rgb);
+            mesh.SetUVs(3, cornerC_rgb);
+            mesh.SetUVs(4, cornerPrimal);
             mesh.RecalculateNormals();
             mesh.RecalculateBounds();
             return mesh;
+        }
+
+        // ----------------- Outline overlay (wedge-perimeter line topology) ----------
+        //
+        // For every dual polygon, emits one line segment per polygon edge V → M, where
+        // V is the polygon centroid (≈ primal vertex this dual cell surrounds) and M
+        // is the midpoint of that polygon edge (= midpoint of two adjacent corner
+        // primal centroids). Two adjacent dual polygons each contribute one V → M
+        // segment at the shared midpoint M, together forming the full wedge perimeter
+        // polyline V₁ → M → V₂ between the two primal cells the edge separates.
+        //
+        // These segments coincide exactly with the rendered wedge boundaries — every
+        // tile presenter is built around the same wedge decomposition.
+        static void BuildOutlineMesh(PrimalChunk primal, Mesh mesh)
+        {
+            List<Polygon> dualPolys = primal.Dual;
+            if (dualPolys == null) { mesh.Clear(); return; }
+
+            int segCount = 0;
+            foreach (Polygon poly in dualPolys)
+            {
+                int n = poly.GetVerticesPosition().Length;
+                if (n < 3) continue;
+                segCount += n;
+            }
+            if (segCount == 0) { mesh.Clear(); return; }
+
+            Vector3[] verts = new Vector3[segCount * 2];
+            int[] idx = new int[segCount * 2];
+            Vector3 lift = new Vector3(0f, 0.02f, 0f);
+
+            int vCursor = 0;
+            int iCursor = 0;
+            foreach (Polygon poly in dualPolys)
+            {
+                Vector3[] pverts = poly.GetVerticesPosition();
+                int n = pverts.Length;
+                if (n < 3) continue;
+
+                Vector3 V = Vector3.zero;
+                for (int i = 0; i < n; i++) V += pverts[i];
+                V /= n;
+                Vector3 Vlift = V + lift;
+
+                for (int i = 0; i < n; i++)
+                {
+                    int next = (i + 1) % n;
+                    Vector3 M = 0.5f * (pverts[i] + pverts[next]) + lift;
+                    verts[vCursor] = Vlift;
+                    verts[vCursor + 1] = M;
+                    idx[iCursor] = vCursor;
+                    idx[iCursor + 1] = vCursor + 1;
+                    vCursor += 2;
+                    iCursor += 2;
+                }
+            }
+
+            mesh.Clear();
+            mesh.vertices = verts;
+            mesh.SetIndices(idx, MeshTopology.Lines, 0);
+            mesh.RecalculateBounds();
+        }
+
+        static void DestroyOutlineOverlay(Presence p)
+        {
+            if (p.OutlineMesh != null) { UnityEngine.Object.Destroy(p.OutlineMesh); p.OutlineMesh = null; }
+            if (p.OutlineGo != null) { UnityEngine.Object.Destroy(p.OutlineGo); p.OutlineGo = null; }
+            p.OutlineMf = null;
+            p.OutlineMr = null;
+            p.OutlineBuiltFromVersion = -1;
+        }
+
+        // Push the current ShowOutlines flag into every live presence's outline
+        // renderer in O(presences). Used by GameModeController on Tab toggle so
+        // the swap is visible on the same frame.
+        public void RequestOutlineRefresh()
+        {
+            foreach (Presence p in presences.Values)
+                if (p.OutlineMr != null) p.OutlineMr.enabled = ShowOutlines;
         }
     }
 }

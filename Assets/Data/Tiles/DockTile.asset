@@ -1,0 +1,22 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: ba03f00000000000000000000000a003, type: 3}
+  m_Name: DockTile
+  m_EditorClassIdentifier: 
+  kind: 6
+  displayName: Dock
+  hotkey: 55
+  paletteSwatch: {r: 1, g: 1, b: 0.4, a: 1}
+  material: {fileID: 2100000, guid: d6fbf45f7e8c9d0e2f5a1b4c6d7e8f9a, type: 2}
+  presenter: {fileID: 11400000, guid: ca06000000000000000000000000ca06, type: 2}
+  placementRule: {fileID: 11400000, guid: ca08000000000000000000000000ca08, type: 2}
+  carvesTerrain: 0
