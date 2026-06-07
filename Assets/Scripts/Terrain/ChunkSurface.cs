@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using TerrainGrid.MeshBuilders;
 using UnityEngine;
 
 namespace TerrainGrid
@@ -9,55 +10,59 @@ namespace TerrainGrid
     // chunk any client wants, with a MeshRenderer when someone wants it drawn and a
     // MeshCollider when someone wants it physical.
     //
-    // Multi-client by design: ChunkManager registers a render request (camera-rendered set)
-    // *and* a collider request (so the boat doesn't fall through visible terrain). The
-    // SimulationManager registers a collider-only request for the chunks under its agents.
-    // Each client is expected to have already expanded its user-facing set to include the
-    // minimal halo of lower-coord neighbours that own the perimeter cells — see
-    // ChunkCoord.MinimalHalo.
+    // Per-kind overlays (Road / Building / Field / Market / Lighthouse / Dock) are
+    // dispatched explicitly in EnsurePresence — one call per kind through the shared
+    // RebuildOverlay helper. Adding a new TileKind takes three coordinated edits:
+    //   1. Add the enum entry in TileProperty.cs.
+    //   2. Add a Build*Mesh.cs file under MeshBuilders/.
+    //   3. Add one Material field on ChunkManager (passed through TileMaterialSet) +
+    //      one RebuildOverlay call here.
+    // No ScriptableObjects, no catalog assets — just static dispatch.
     //
     // Flat-ocean fast path: when primal.IsFlat is true, the surface mounts a single shared
     // hex-tile mesh (size = chunk circumradius) at the chunk's world center, used for both
-    // renderer and collider, instead of building per-cell geometry from the dual. The same
-    // Mesh object is reused across every flat chunk — one allocation, one MeshCollider cook,
-    // shared by potentially thousands of distant-ocean chunks.
+    // renderer and collider, instead of building per-cell geometry from the dual.
     //
     // Warm-presence cache: when a chunk leaves the wanted set, its Presence (GameObject +
-    // Mesh + MeshCollider) is SetActive(false) and parked in a FIFO cache instead of being
-    // destroyed. On reentry the GameObject is SetActive(true) and — if primal.Version still
-    // matches — the existing Mesh and cooked MeshCollider are reused as-is, skipping the
-    // ~10ms-per-chunk BuildMesh + ColliderCook hitch that would otherwise hit the main
-    // thread on every camera-pan revisit. Overflow evicts FIFO; size bound is
-    // `presenceCacheSize` (constructor argument).
-    //
-    // Catalog-driven overlays: each TileKind's visual is owned by a TilePresenter
-    // ScriptableObject (RoadPresenter, BuildingPresenter, etc., resolved through the
-    // TileCatalog). The surface iterates the catalog per Apply to rebuild stale overlays
-    // and tear down overlays whose chunk has dropped to zero cells of that kind. Adding a
-    // new tile kind = author a new Presenter + TileDefinition asset; no edits here.
+    // Mesh + MeshCollider + per-kind handles) is SetActive(false) and parked in a FIFO
+    // cache instead of being destroyed. On reentry, if primal.Version still matches, the
+    // existing meshes and cooked colliders are reused as-is.
     public class ChunkSurface
     {
+        // One bundle so ChunkSurface's constructor + the dispatch helper don't grow
+        // a six-Material argument list every time a kind is added.
+        public struct TileMaterialSet
+        {
+            public Material Road;
+            public Material Building;
+            public Material Field;
+            public Material Market;
+            public Material Lighthouse;
+            public Material Dock;
+        }
+
         class Presence
         {
             public GameObject Go;
             public MeshFilter Mf;
-            public MeshRenderer Mr;     // null when not currently rendered
-            public MeshCollider Mc;     // null when not currently collided
-            public Mesh Mesh;           // owned per-presence mesh; null when using the shared flat tile
+            public MeshRenderer Mr;
+            public MeshCollider Mc;
+            public Mesh Mesh;
             public int MeshBuiltFromVersion = -1;
-            public bool Flat;           // mode flag: true while sharedMesh == flatTile and GO is positioned
+            public bool Flat;
 
-            // Sparse per-kind overlay state. Sized lazily — only kinds that have ever
-            // had a cell in this chunk get a Handle entry. Owned by ChunkSurface;
-            // presenters mutate handle fields but don't keep their own references.
-            public readonly Dictionary<TileKind, ChunkOverlayHandle> Overlays =
-                new Dictionary<TileKind, ChunkOverlayHandle>();
+            // Per-kind overlay state, keyed by TileKind. Sparse: only kinds that
+            // have ever had a cell in this chunk get a handle entry. Same key
+            // scheme survives across the catalog rollback so warm-cached presences
+            // are reusable.
+            public readonly Dictionary<TileKind, OverlayHandle> Overlays =
+                new Dictionary<TileKind, OverlayHandle>();
 
-            // Outline overlay: a child GameObject under `Go` carrying a line-topology
-            // Mesh that traces every dual cell's wedge perimeter via V → M segments
-            // per dual polygon edge. Not a per-tile overlay — it's a global RTS-mode
-            // decorator over the whole terrain, so it stays separate from the catalog
-            // path. Lazily instantiated, version-gated, visibility tracks ShowOutlines.
+            // Outline overlay: a child GameObject under Go carrying a
+            // line-topology Mesh tracing every dual cell's wedge perimeter via
+            // V → M segments. Global RTS-mode decorator, not a per-tile overlay
+            // — stays inline here. Lazily instantiated, version-gated rebuild;
+            // visibility tracks ShowOutlines.
             public GameObject OutlineGo;
             public MeshFilter OutlineMf;
             public MeshRenderer OutlineMr;
@@ -68,7 +73,7 @@ namespace TerrainGrid
         readonly Transform parent;
         readonly Material material;
         readonly Material outlineMaterial;
-        readonly TileCatalog catalog;
+        readonly TileMaterialSet tileMaterials;
         readonly float hexRadius;
         readonly int chunkGridSize;
         readonly int presenceCacheSize;
@@ -79,8 +84,6 @@ namespace TerrainGrid
         // change visible on the same frame.
         public static bool ShowOutlines = false;
 
-        // Reused scratch MaterialPropertyBlock for setting per-chunk shader
-        // uniforms (_ChunkQR) on each terrain MeshRenderer.
         readonly MaterialPropertyBlock chunkMpb = new MaterialPropertyBlock();
         static readonly int ChunkQRId = Shader.PropertyToID("_ChunkQR");
 
@@ -89,27 +92,25 @@ namespace TerrainGrid
         readonly Dictionary<object, HashSet<ChunkCoord>> colliderRequests = new();
         readonly Dictionary<ChunkCoord, Presence> presences = new();
 
-        // Warm cache: inactive GameObjects whose underlying chunk left the wanted set.
         readonly Dictionary<ChunkCoord, Presence> cache = new();
         readonly Queue<ChunkCoord> cacheOrder = new();
 
         Mesh flatTile;
 
         public ChunkSurface(Transform parent, Material material, Material outlineMaterial,
-                            TileCatalog catalog,
+                            TileMaterialSet tileMaterials,
                             float hexRadius, int chunkGridSize,
                             int presenceCacheSize = 64)
         {
             this.parent = parent;
             this.material = material;
             this.outlineMaterial = outlineMaterial;
-            this.catalog = catalog;
+            this.tileMaterials = tileMaterials;
             this.hexRadius = hexRadius;
             this.chunkGridSize = chunkGridSize;
             this.presenceCacheSize = Mathf.Max(0, presenceCacheSize);
         }
 
-        // For debug gizmos: the cached duals of every presented chunk's primal.
         public IEnumerable<List<Polygon>> DualPolygons
         {
             get
@@ -122,9 +123,6 @@ namespace TerrainGrid
             }
         }
 
-        // Anyone with primal chunks the surface might need can register a lookup. Sources
-        // are tried in registration order; first non-null wins. ChunkManager registers its
-        // render mirror; SimulationManager registers its sim mirror as a fallback.
         public void AddPrimalSource(Func<ChunkCoord, PrimalChunk> source)
         {
             if (source != null) primalSources.Add(source);
@@ -142,8 +140,6 @@ namespace TerrainGrid
             else colliderRequests[client] = new HashSet<ChunkCoord>(coords);
         }
 
-        // Reconcile scene presence with the current requests. Cheap when nothing changed;
-        // safe to call every frame.
         public void Apply()
         {
             using var _ = TerrainProfiler.Measure(TerrainProfiler.Phase.SurfaceApply);
@@ -209,7 +205,7 @@ namespace TerrainGrid
                 presences[coord] = p;
             }
 
-            // ---- Terrain mesh (flat fast path vs. per-chunk dual mesh) ----
+            // ---- Terrain base mesh (flat fast path or per-chunk dual mesh) ----
             Mesh activeMesh;
             if (primal.IsFlat)
             {
@@ -257,11 +253,6 @@ namespace TerrainGrid
             {
                 p.Mr = p.Go.AddComponent<MeshRenderer>();
                 p.Mr.sharedMaterial = material;
-                // Stamp the chunk's axial coord onto the renderer via MPB so the
-                // shader can compare against the hovered chunk and only tint cells
-                // in the correct chunk. Set once at attach time — coord doesn't
-                // change for the renderer's lifetime. Breaks SRP batching for
-                // terrain (acceptable: ~50 visible chunks).
                 chunkMpb.Clear();
                 chunkMpb.SetVector(ChunkQRId, new Vector4(coord.q, coord.r, 0f, 0f));
                 p.Mr.SetPropertyBlock(chunkMpb);
@@ -285,68 +276,27 @@ namespace TerrainGrid
                 p.Mc = null;
             }
 
-            // ---- Per-kind overlays (catalog-driven) ----
+            // ---- Per-kind overlays (explicit dispatch, one call per kind) ----
             //
-            // Flat chunks skip — they mount the shared flat tile, can't host paintable
-            // land tiles, and don't ship a primal neighbour table to read from. We also
-            // tear down every overlay when wantRender drops (collider-only consumer),
-            // matching the prior Road/Building behaviour.
-            if (catalog != null && !primal.IsFlat)
+            // Flat chunks skip — they mount the shared flat tile, can't host
+            // paintable land tiles, and don't ship a primal neighbour table.
+            // wantRender=false (collider-only consumer) destroys every overlay
+            // GO so the warm cache doesn't pin GPU meshes for off-screen chunks.
+            if (!primal.IsFlat)
             {
                 if (wantRender)
                 {
-                    foreach (TileDefinition def in catalog.Definitions)
-                    {
-                        if (def == null || def.presenter == null) continue;
-
-                        if (!p.Overlays.TryGetValue(def.kind, out ChunkOverlayHandle handle))
-                        {
-                            handle = new ChunkOverlayHandle();
-                            p.Overlays[def.kind] = handle;
-                        }
-
-                        PresenterContext ctx = new PresenterContext(
-                            coord, primal, def.kind, p.Go.transform,
-                            def.material, handle, LookupPrimal,
-                            $"{def.displayName}Overlay");
-                        bool hasAny = def.presenter.Rebuild(in ctx);
-
-                        // Collider lifecycle: presenters that report RequiresCollider get a
-                        // MeshCollider attached on the overlay GO when both wantCollider AND
-                        // hasAny hold. Tear down otherwise — the prior Road/Building code did
-                        // the same dance.
-                        if (def.presenter.RequiresCollider && hasAny && wantCollider
-                            && handle.Go != null && handle.Mesh != null)
-                        {
-                            if (handle.Mc == null)
-                            {
-                                handle.Mc = handle.Go.AddComponent<MeshCollider>();
-                                using (TerrainProfiler.Measure(TerrainProfiler.Phase.ColliderCook))
-                                    handle.Mc.sharedMesh = handle.Mesh;
-                                TerrainProfiler.IncColliderAssigns();
-                            }
-                            else if (handle.Mc.sharedMesh != handle.Mesh)
-                            {
-                                using (TerrainProfiler.Measure(TerrainProfiler.Phase.ColliderCook))
-                                    handle.Mc.sharedMesh = handle.Mesh;
-                            }
-                        }
-                        else if (handle.Mc != null)
-                        {
-                            UnityEngine.Object.Destroy(handle.Mc);
-                            handle.Mc = null;
-                        }
-                    }
+                    RebuildOverlay(p, TileKind.Road,       primal, tileMaterials.Road,       true,  wantCollider, RoadMesh.Build,       "RoadOverlay");
+                    RebuildOverlay(p, TileKind.Building,   primal, tileMaterials.Building,   true,  wantCollider, BuildingMesh.Build,   "BuildingOverlay");
+                    RebuildOverlay(p, TileKind.Field,      primal, tileMaterials.Field,      false, wantCollider, FieldMesh.Build,      "FieldOverlay");
+                    RebuildOverlay(p, TileKind.Market,     primal, tileMaterials.Market,     false, wantCollider, MarketMesh.Build,     "MarketOverlay");
+                    RebuildOverlay(p, TileKind.Lighthouse, primal, tileMaterials.Lighthouse, true,  wantCollider, LighthouseMesh.Build, "LighthouseOverlay");
+                    RebuildOverlay(p, TileKind.Dock,       primal, tileMaterials.Dock,       true,  wantCollider, DockMesh.Build,       "DockOverlay");
                 }
                 else
                 {
-                    // Collider-only / off-screen: tear down every overlay's GO so the warm
-                    // cache doesn't pin GPU meshes for chunks that aren't drawn anyway.
-                    foreach (KeyValuePair<TileKind, ChunkOverlayHandle> kv in p.Overlays)
-                    {
-                        TileDefinition def = catalog.Get(kv.Key);
-                        def?.presenter?.DestroyOverlay(kv.Value);
-                    }
+                    foreach (KeyValuePair<TileKind, OverlayHandle> kv in p.Overlays)
+                        DestroyOverlay(kv.Value);
                 }
             }
 
@@ -384,6 +334,100 @@ namespace TerrainGrid
             }
         }
 
+        // Per-kind dispatch helper. Owns the entire lifecycle for one (chunk,
+        // TileKind) overlay: lazy-spawn the child GO + MeshFilter +
+        // MeshRenderer, version-gate the rebuild, swap the Mesh asset safely,
+        // attach/detach the MeshCollider when `requiresCollider && wantCollider`,
+        // and destroy the GO when the chunk has zero cells of this kind.
+        //
+        // The mesh builder is a delegate so this helper doesn't know anything
+        // per-kind. Adding a kind = pass a new Build delegate.
+        void RebuildOverlay(Presence p, TileKind kind, PrimalChunk primal,
+                            Material material,
+                            bool requiresCollider, bool wantCollider,
+                            Func<PrimalChunk, Func<ChunkCoord, PrimalChunk>, Mesh> build,
+                            string label)
+        {
+            if (!p.Overlays.TryGetValue(kind, out OverlayHandle handle))
+            {
+                handle = new OverlayHandle();
+                p.Overlays[kind] = handle;
+            }
+
+            // Skip rebuild when same Version and we already have a mesh — the
+            // worker bumps Version on any tile mutation (cross-chunk cascade
+            // included), so this catches the dominant "nothing changed" case.
+            bool versionMatches = handle.BuiltFromVersion == primal.Version && handle.Mesh != null;
+
+            if (!versionMatches)
+            {
+                Mesh mesh = build(primal, LookupPrimal);
+                bool hasGeometry = mesh != null && mesh.vertexCount > 0;
+
+                if (!hasGeometry)
+                {
+                    // No cells of this kind in the chunk — tear the GO down
+                    // entirely. Frees GPU resources and keeps the scene tree
+                    // clean. Free the throwaway empty mesh too.
+                    if (mesh != null) UnityEngine.Object.Destroy(mesh);
+                    DestroyOverlay(handle);
+                    handle.BuiltFromVersion = primal.Version;
+                    return;
+                }
+
+                if (handle.Go == null)
+                {
+                    handle.Go = new GameObject(label);
+                    handle.Go.transform.SetParent(p.Go.transform, false);
+                    handle.Mf = handle.Go.AddComponent<MeshFilter>();
+                    handle.Mr = handle.Go.AddComponent<MeshRenderer>();
+                    handle.Mr.sharedMaterial = material;
+                }
+
+                if (handle.Mesh != null) UnityEngine.Object.Destroy(handle.Mesh);
+                handle.Mesh = mesh;
+                handle.Mesh.name = $"{label} (v{primal.Version})";
+                handle.Mf.sharedMesh = handle.Mesh;
+                handle.BuiltFromVersion = primal.Version;
+            }
+
+            // Collider lifecycle. Attach when the presenter requires it AND
+            // the chunk wants colliders AND the overlay actually has geometry.
+            // Detach when any of those drops. Re-cook when the Mesh asset
+            // changed (different reference).
+            if (requiresCollider && wantCollider && handle.Go != null && handle.Mesh != null)
+            {
+                if (handle.Mc == null)
+                {
+                    handle.Mc = handle.Go.AddComponent<MeshCollider>();
+                    using (TerrainProfiler.Measure(TerrainProfiler.Phase.ColliderCook))
+                        handle.Mc.sharedMesh = handle.Mesh;
+                    TerrainProfiler.IncColliderAssigns();
+                }
+                else if (handle.Mc.sharedMesh != handle.Mesh)
+                {
+                    using (TerrainProfiler.Measure(TerrainProfiler.Phase.ColliderCook))
+                        handle.Mc.sharedMesh = handle.Mesh;
+                }
+            }
+            else if (handle.Mc != null)
+            {
+                UnityEngine.Object.Destroy(handle.Mc);
+                handle.Mc = null;
+            }
+        }
+
+        static void DestroyOverlay(OverlayHandle handle)
+        {
+            if (handle == null) return;
+            if (handle.Mc != null) { UnityEngine.Object.Destroy(handle.Mc); handle.Mc = null; }
+            if (handle.Mesh != null) { UnityEngine.Object.Destroy(handle.Mesh); handle.Mesh = null; }
+            if (handle.Go != null) { UnityEngine.Object.Destroy(handle.Go); handle.Go = null; }
+            handle.Mf = null;
+            handle.Mr = null;
+            handle.BuiltFromVersion = -1;
+        }
+
         void ParkPresence(ChunkCoord coord)
         {
             if (!presences.TryGetValue(coord, out Presence p)) return;
@@ -417,29 +461,12 @@ namespace TerrainGrid
             }
         }
 
-        // Tear down the Unity objects backing a presence. Mesh assets survive
-        // GameObject destruction, so each Mesh is destroyed explicitly. Catalog
-        // overlays are routed through each presenter's DestroyOverlay so a
-        // future presenter with non-trivial cleanup gets called correctly.
-        void DestroyPresenceObjects(Presence p)
+        static void DestroyPresenceObjects(Presence p)
         {
             if (p.Mesh != null) UnityEngine.Object.Destroy(p.Mesh);
             if (p.OutlineMesh != null) UnityEngine.Object.Destroy(p.OutlineMesh);
-            if (catalog != null)
-            {
-                foreach (KeyValuePair<TileKind, ChunkOverlayHandle> kv in p.Overlays)
-                {
-                    TileDefinition def = catalog.Get(kv.Key);
-                    if (def?.presenter != null) def.presenter.DestroyOverlay(kv.Value);
-                    else
-                    {
-                        // Catalog changed mid-session; fall back to manual cleanup so the
-                        // mesh asset doesn't leak.
-                        if (kv.Value.Mesh != null) UnityEngine.Object.Destroy(kv.Value.Mesh);
-                        if (kv.Value.Go != null) UnityEngine.Object.Destroy(kv.Value.Go);
-                    }
-                }
-            }
+            foreach (KeyValuePair<TileKind, OverlayHandle> kv in p.Overlays)
+                DestroyOverlay(kv.Value);
             p.Overlays.Clear();
             if (p.Go != null) UnityEngine.Object.Destroy(p.Go);
         }
@@ -473,9 +500,6 @@ namespace TerrainGrid
             return result;
         }
 
-        // Single shared flat-ocean tile: a regular flat-top hexagon at the origin in local
-        // space, circumradius = chunkGridSize · hexRadius (matches a chunk's footprint). Built
-        // once, reused by every flat chunk's GameObject.
         Mesh GetFlatTile()
         {
             if (flatTile != null) return flatTile;
@@ -497,58 +521,61 @@ namespace TerrainGrid
             return flatTile;
         }
 
-        // ----------------- Terrain mesh (per-corner wedge decomposition) -----------------
+        // Carve list: cells of these kinds have their terrain wedge SKIPPED in
+        // BuildMesh, because the corresponding overlay paints the cell
+        // pixel-for-pixel. Default + Market/Lighthouse/Dock do NOT carve —
+        // those structures sit on top of natural ground.
+        static bool IsCarvingKind(TileKind k)
+            => k == TileKind.Road || k == TileKind.Building || k == TileKind.Field;
+
+        // Terrain mesh build. Walks every dual polygon and emits the wedge of
+        // each non-carved corner. Each wedge is a 2-triangle fan written with
+        // unshared vertices (3 vertices per triangle) so the shader's
+        // nearest-corner barycentric tinting can paint sharp per-cell
+        // Voronoi regions. cornerA/B/C_rgb (TEXCOORD1/2/3) are read by
+        // TerrainElevation.shader as a multiplicative tint on top of the
+        // height-banded biome colour.
         //
-        // Walks each dual polygon and emits the wedge of every non-carved corner. A corner
-        // is "carved" if its owning primal cell's kind has TileDefinition.carvesTerrain
-        // set — in which case the kind's presenter paints the wedge instead. Carved
-        // wedges (Road / Building / Field today) are skipped; non-carved wedges
-        // (Default + Market / Lighthouse / Dock) are emitted with a neutral white tint
-        // so the structure rendered on top sits over visible ground.
-        //
-        // Vertices are unshared per triangle so the shader can compute nearest-corner
-        // barycentric tinting from the (cornerA, cornerB, cornerC) triple. Today every
-        // wedge uses a degenerate triple (all same colour, all same primal index) since
-        // we paint the whole wedge in one hue — leaves room for cross-corner gradients
-        // if we ever want them.
-        Mesh BuildMesh(PrimalChunk primal)
+        // Today every wedge writes the SAME triple into all three corner
+        // slots (degenerate NN) — gives one hue per wedge. Future cross-corner
+        // gradients would write three different colours per triangle.
+        static Mesh BuildMesh(PrimalChunk primal)
         {
             List<Polygon> polygons = primal.Dual;
             int[] dvpi = primal.DualVertexPrimalIndex;
             TileProperty[] tp = primal.TileProperties;
 
-            var vertices = new List<Vector3>();
-            var triangles = new List<int>();
-            var colors = new List<Color32>();
+            var vertices    = new List<Vector3>();
+            var triangles   = new List<int>();
+            var colors      = new List<Color32>();
             var barycentric = new List<Vector3>();
             var cornerA_rgb = new List<Vector3>();
             var cornerB_rgb = new List<Vector3>();
             var cornerC_rgb = new List<Vector3>();
             var cornerPrimal = new List<Vector3>();
 
-            // The terrain wedge tint is currently constant — structures paint themselves
-            // and area presenters carve, so there's no need for per-kind base colour.
-            // Reserved for future "tint terrain under a structure" extensions.
-            Color32 neutral = new Color32(255, 255, 255, 255);
-            Vector3 neutralRgb = new Vector3(1f, 1f, 1f);
-
             int cornerCursor = 0;
             foreach (Polygon poly in polygons)
             {
                 Vector3[] verts = poly.GetVerticesPosition();
-                if (verts.Length < 3) { cornerCursor += verts.Length; continue; }
+                if (verts.Length < 3)
+                {
+                    cornerCursor += verts.Length;
+                    continue;
+                }
 
                 int n = verts.Length;
+                Color32[] cornerColors = new Color32[n];
                 int[] cornerPrimalIdx = new int[n];
                 bool[] cornerIsCarved = new bool[n];
                 for (int i = 0; i < n; i++)
                 {
                     int primalIdx = dvpi != null && cornerCursor + i < dvpi.Length
                         ? dvpi[cornerCursor + i] : -1;
+                    cornerColors[i] = TileKindPalette.ColorFor(primalIdx, tp);
                     cornerPrimalIdx[i] = primalIdx;
-                    bool carved = false;
-                    if (primalIdx >= 0 && tp != null && primalIdx < tp.Length && catalog != null)
-                        carved = catalog.IsCarvingKind(tp[primalIdx].Kind);
+                    bool carved = primalIdx >= 0 && tp != null && primalIdx < tp.Length
+                                  && IsCarvingKind(tp[primalIdx].Kind);
                     cornerIsCarved[i] = carved;
                 }
                 cornerCursor += n;
@@ -566,35 +593,44 @@ namespace TerrainGrid
                     Vector3 Mprev = 0.5f * (verts[iPrev] + verts[i]);
                     Vector3 Mnext = 0.5f * (verts[i] + verts[iNext]);
 
+                    Color32 c = cornerColors[i];
+                    Vector3 cRgb = TileKindPalette.ColorRgb(c);
                     Vector3 baryA = new Vector3(1, 0, 0);
                     Vector3 baryB = new Vector3(0, 1, 0);
                     Vector3 baryC = new Vector3(0, 0, 1);
                     int idx = cornerPrimalIdx[i];
                     Vector3 vP = new Vector3(idx, idx, idx);
 
+                    // Triangle 1 — (c_i, V, M_next). Winding chosen to match
+                    // RoadMesh / BuildingMesh / FieldMesh (and all the new
+                    // wedge structure meshes) so terrain wedges face up
+                    // under Unity's left-handed front-face convention.
+                    // Triangle 2 below does (c_i, M_prev, V) for the same
+                    // reason. Both pair up to cover the full corner-wedge
+                    // quad (c_i, M_next, V, M_prev) viewed from above.
                     int baseIdx = vertices.Count;
-                    vertices.Add(verts[i]); colors.Add(neutral); barycentric.Add(baryA);
-                    cornerA_rgb.Add(neutralRgb); cornerB_rgb.Add(neutralRgb); cornerC_rgb.Add(neutralRgb);
+                    vertices.Add(verts[i]); colors.Add(c); barycentric.Add(baryA);
+                    cornerA_rgb.Add(cRgb); cornerB_rgb.Add(cRgb); cornerC_rgb.Add(cRgb);
                     cornerPrimal.Add(vP);
-                    vertices.Add(Mnext);    colors.Add(neutral); barycentric.Add(baryB);
-                    cornerA_rgb.Add(neutralRgb); cornerB_rgb.Add(neutralRgb); cornerC_rgb.Add(neutralRgb);
+                    vertices.Add(Mnext);    colors.Add(c); barycentric.Add(baryB);
+                    cornerA_rgb.Add(cRgb); cornerB_rgb.Add(cRgb); cornerC_rgb.Add(cRgb);
                     cornerPrimal.Add(vP);
-                    vertices.Add(V);        colors.Add(neutral); barycentric.Add(baryC);
-                    cornerA_rgb.Add(neutralRgb); cornerB_rgb.Add(neutralRgb); cornerC_rgb.Add(neutralRgb);
+                    vertices.Add(V);        colors.Add(c); barycentric.Add(baryC);
+                    cornerA_rgb.Add(cRgb); cornerB_rgb.Add(cRgb); cornerC_rgb.Add(cRgb);
                     cornerPrimal.Add(vP);
                     triangles.Add(baseIdx);
-                    triangles.Add(baseIdx + 1);
-                    triangles.Add(baseIdx + 2);
+                    triangles.Add(baseIdx + 2);    // V before Mnext flips winding
+                    triangles.Add(baseIdx + 1);    // Mnext after V — now (c_i, V, Mnext)
 
                     int baseIdx2 = vertices.Count;
-                    vertices.Add(verts[i]); colors.Add(neutral); barycentric.Add(baryA);
-                    cornerA_rgb.Add(neutralRgb); cornerB_rgb.Add(neutralRgb); cornerC_rgb.Add(neutralRgb);
+                    vertices.Add(verts[i]); colors.Add(c); barycentric.Add(baryA);
+                    cornerA_rgb.Add(cRgb); cornerB_rgb.Add(cRgb); cornerC_rgb.Add(cRgb);
                     cornerPrimal.Add(vP);
-                    vertices.Add(Mprev);    colors.Add(neutral); barycentric.Add(baryB);
-                    cornerA_rgb.Add(neutralRgb); cornerB_rgb.Add(neutralRgb); cornerC_rgb.Add(neutralRgb);
+                    vertices.Add(Mprev);    colors.Add(c); barycentric.Add(baryB);
+                    cornerA_rgb.Add(cRgb); cornerB_rgb.Add(cRgb); cornerC_rgb.Add(cRgb);
                     cornerPrimal.Add(vP);
-                    vertices.Add(V);        colors.Add(neutral); barycentric.Add(baryC);
-                    cornerA_rgb.Add(neutralRgb); cornerB_rgb.Add(neutralRgb); cornerC_rgb.Add(neutralRgb);
+                    vertices.Add(V);        colors.Add(c); barycentric.Add(baryC);
+                    cornerA_rgb.Add(cRgb); cornerB_rgb.Add(cRgb); cornerC_rgb.Add(cRgb);
                     cornerPrimal.Add(vP);
                     triangles.Add(baseIdx2);
                     triangles.Add(baseIdx2 + 1);
@@ -619,17 +655,11 @@ namespace TerrainGrid
             return mesh;
         }
 
-        // ----------------- Outline overlay (wedge-perimeter line topology) ----------
-        //
-        // For every dual polygon, emits one line segment per polygon edge V → M, where
-        // V is the polygon centroid (≈ primal vertex this dual cell surrounds) and M
-        // is the midpoint of that polygon edge (= midpoint of two adjacent corner
-        // primal centroids). Two adjacent dual polygons each contribute one V → M
-        // segment at the shared midpoint M, together forming the full wedge perimeter
-        // polyline V₁ → M → V₂ between the two primal cells the edge separates.
-        //
-        // These segments coincide exactly with the rendered wedge boundaries — every
-        // tile presenter is built around the same wedge decomposition.
+        // Wedge-perimeter outline mesh. One V → M segment per dual polygon
+        // edge, where V = polygon centroid and M = midpoint of that polygon
+        // edge. Two adjacent polygons each contribute one V → M segment at
+        // the shared midpoint, together forming the full wedge perimeter
+        // polyline. Coincides exactly with rendered cell boundaries.
         static void BuildOutlineMesh(PrimalChunk primal, Mesh mesh)
         {
             List<Polygon> dualPolys = primal.Dual;
@@ -689,9 +719,6 @@ namespace TerrainGrid
             p.OutlineBuiltFromVersion = -1;
         }
 
-        // Push the current ShowOutlines flag into every live presence's outline
-        // renderer in O(presences). Used by GameModeController on Tab toggle so
-        // the swap is visible on the same frame.
         public void RequestOutlineRefresh()
         {
             foreach (Presence p in presences.Values)

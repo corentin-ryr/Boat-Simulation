@@ -46,12 +46,19 @@ namespace TerrainGrid
                  "corner-colour UVs.")]
         public Material groundMaterial;
 
-        [Tooltip("Drives all paintable tile kinds — palette buttons, overlay materials, " +
-                 "placement rules, presenter pluggability. Drop a TileCatalog asset here. " +
-                 "Adding a new kind = author a new TileDefinition .asset and append it to " +
-                 "the catalog's `definitions` list; no edits to this MonoBehaviour or to " +
-                 "ChunkSurface required.")]
-        public TileCatalog tileCatalog;
+        [Header("Tile overlay materials")]
+        [Tooltip("Per-chunk Road overlay (Townscaper-style sunken wedges + curbs).")]
+        public Material roadMaterial;
+        [Tooltip("Per-chunk Building overlay (raised wedge roofs + walls).")]
+        public Material buildingMaterial;
+        [Tooltip("Per-chunk Field overlay (flat tinted wedges).")]
+        public Material fieldMaterial;
+        [Tooltip("Per-chunk Market overlay (raised wedge plaza + centroid canopy slab).")]
+        public Material marketMaterial;
+        [Tooltip("Per-chunk Lighthouse overlay (raised wedge platform + centroid tower).")]
+        public Material lighthouseMaterial;
+        [Tooltip("Per-chunk Dock overlay (raised wedge stone block with buried walls).")]
+        public Material dockMaterial;
 
         [Header("RTS Highlights")]
         [Tooltip("Colour blended over the cell under the cursor in RTS mode. Alpha controls " +
@@ -86,7 +93,6 @@ namespace TerrainGrid
         // streaming consumers and collider needs on the surface. Available after Start().
         public TerrainStreamer Streamer => streamer;
         public ChunkSurface Surface => surface;
-        public TileCatalog Catalog => tileCatalog;
 
         // Read-only handle on the main-thread render mirror's view of a chunk. Lets gameplay
         // code (e.g. TilePainter) access published-side data — centroids for nearest-tile
@@ -136,8 +142,17 @@ namespace TerrainGrid
 
             // The surface owns the per-chunk GameObjects. We register our render mirror as a
             // primal source; other clients (SimulationManager) add their own mirrors.
-            surface = new ChunkSurface(transform, groundMaterial, outlineMaterial,
-                                       tileCatalog, hexRadius, chunkGridSize, presenceCacheSize);
+            ChunkSurface.TileMaterialSet mats = new ChunkSurface.TileMaterialSet
+            {
+                Road       = roadMaterial,
+                Building   = buildingMaterial,
+                Field      = fieldMaterial,
+                Market     = marketMaterial,
+                Lighthouse = lighthouseMaterial,
+                Dock       = dockMaterial,
+            };
+            surface = new ChunkSurface(transform, groundMaterial, outlineMaterial, mats,
+                                       hexRadius, chunkGridSize, presenceCacheSize);
             surface.AddPrimalSource(coord => renderModel.TryGet(coord, out PrimalChunk pc) ? pc : null);
 
             // Register as a render-ready consumer: the streamer loads our requested chunks plus a
