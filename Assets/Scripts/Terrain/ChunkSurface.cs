@@ -30,7 +30,7 @@ namespace TerrainGrid
     public class ChunkSurface
     {
         // One bundle so ChunkSurface's constructor + the dispatch helper don't grow
-        // a six-Material argument list every time a kind is added.
+        // a long Material argument list every time a kind is added.
         public struct TileMaterialSet
         {
             public Material Road;
@@ -39,6 +39,8 @@ namespace TerrainGrid
             public Material Market;
             public Material Lighthouse;
             public Material Dock;
+            public Material House;
+            public Material Bakery;
         }
 
         class Presence
@@ -68,6 +70,15 @@ namespace TerrainGrid
             public MeshRenderer OutlineMr;
             public Mesh OutlineMesh;
             public int OutlineBuiltFromVersion = -1;
+
+            // Snapshot of TileProperty.Kind per primal cell, taken on each
+            // BuildMesh pass after the diff. Lets EnsurePresence compare the
+            // newly-published TileProperties against the last-seen state and
+            // emit OnTileChanged events for actual per-cell mutations. Kept on
+            // the Presence so warm-cache parking preserves it across
+            // park/unpark cycles — the diff covers any Version bump that
+            // happened while the chunk was off-screen.
+            public TileKind[] LastTileKinds;
         }
 
         readonly Transform parent;
@@ -77,6 +88,11 @@ namespace TerrainGrid
         readonly float hexRadius;
         readonly int chunkGridSize;
         readonly int presenceCacheSize;
+        // Invoked from EnsurePresence whenever a primal cell's TileKind
+        // differs from the last-seen snapshot for that (coord, cell). Set by
+        // ChunkManager which owns the public event surface. Null is allowed —
+        // surface-only test code constructs with no sink.
+        readonly Action<ChunkCoord, int, TileKind, TileKind> onTileChanged;
 
         // Global outline visibility. GameModeController flips this on Tab; the
         // next Apply() pushes it into every per-chunk OutlineMr.enabled. Public
@@ -100,7 +116,8 @@ namespace TerrainGrid
         public ChunkSurface(Transform parent, Material material, Material outlineMaterial,
                             TileMaterialSet tileMaterials,
                             float hexRadius, int chunkGridSize,
-                            int presenceCacheSize = 64)
+                            int presenceCacheSize = 64,
+                            Action<ChunkCoord, int, TileKind, TileKind> onTileChanged = null)
         {
             this.parent = parent;
             this.material = material;
@@ -109,6 +126,7 @@ namespace TerrainGrid
             this.hexRadius = hexRadius;
             this.chunkGridSize = chunkGridSize;
             this.presenceCacheSize = Mathf.Max(0, presenceCacheSize);
+            this.onTileChanged = onTileChanged;
         }
 
         public IEnumerable<List<Polygon>> DualPolygons
@@ -245,6 +263,14 @@ namespace TerrainGrid
                     p.MeshBuiltFromVersion = primal.Version;
                     TerrainProfiler.IncMeshRebuilds();
                     if (p.Mesh != null) TerrainProfiler.AddTrianglesBuilt((int)(p.Mesh.GetIndexCount(0) / 3));
+
+                    // Diff per-cell TileKinds against the last snapshot and
+                    // emit OnTileChanged. Runs inside the Version-mismatch
+                    // block so we only walk on actual change; first sight
+                    // (LastTileKinds == null) seeds the snapshot silently —
+                    // subscribers do their own scan of the live registry on
+                    // start instead of relying on initial event fire.
+                    DiffAndEmitTileChanges(coord, p, primal);
                 }
                 activeMesh = p.Mf.sharedMesh;
             }
@@ -292,6 +318,8 @@ namespace TerrainGrid
                     RebuildOverlay(p, TileKind.Market,     primal, tileMaterials.Market,     false, wantCollider, MarketMesh.Build,     "MarketOverlay");
                     RebuildOverlay(p, TileKind.Lighthouse, primal, tileMaterials.Lighthouse, true,  wantCollider, LighthouseMesh.Build, "LighthouseOverlay");
                     RebuildOverlay(p, TileKind.Dock,       primal, tileMaterials.Dock,       true,  wantCollider, DockMesh.Build,       "DockOverlay");
+                    RebuildOverlay(p, TileKind.House,      primal, tileMaterials.House,      true,  wantCollider, HouseMesh.Build,      "HouseOverlay");
+                    RebuildOverlay(p, TileKind.Bakery,     primal, tileMaterials.Bakery,     true,  wantCollider, BakeryMesh.Build,     "BakeryOverlay");
                 }
                 else
                 {
@@ -524,9 +552,87 @@ namespace TerrainGrid
         // Carve list: cells of these kinds have their terrain wedge SKIPPED in
         // BuildMesh, because the corresponding overlay paints the cell
         // pixel-for-pixel. Default + Market/Lighthouse/Dock do NOT carve —
-        // those structures sit on top of natural ground.
+        // those structures sit on top of natural ground. House and Bakery
+        // share Building's carve behaviour (raised wedge replaces terrain).
         static bool IsCarvingKind(TileKind k)
-            => k == TileKind.Road || k == TileKind.Building || k == TileKind.Field;
+            => k == TileKind.Road || k == TileKind.Building || k == TileKind.Field
+               || k == TileKind.House || k == TileKind.Bakery;
+
+        // Walk the chunk's TileProperties against the last-seen snapshot,
+        // fire OnTileChanged for each diff, then update the snapshot. Runs
+        // inside the Version-mismatch block of EnsurePresence so the dominant
+        // "nothing changed" path stays free of this work.
+        //
+        // First-sight (LastTileKinds == null) fires (Default → kind) events
+        // for every non-Default cell so subscribers (BuildingRegistry, future
+        // quest hooks) pick up painted tiles that arrived via snapshot restore
+        // or while the subscriber was uninstantiated. Subscribers MUST be
+        // idempotent: the same chunk re-parking / re-loading replays the same
+        // events, and an evicted-and-reloaded presence starts with a null
+        // snapshot again.
+        void DiffAndEmitTileChanges(ChunkCoord coord, Presence p, PrimalChunk primal)
+        {
+            TileProperty[] tp = primal.TileProperties;
+            if (tp == null)
+            {
+                // Chunk lost its TileProperties (snapshot restore from a never-
+                // painted chunk). Emit a "back to Default" for any previously-
+                // seen non-Default cell, then clear the snapshot.
+                if (p.LastTileKinds != null)
+                {
+                    for (int i = 0; i < p.LastTileKinds.Length; i++)
+                    {
+                        TileKind oldK = p.LastTileKinds[i];
+                        if (oldK != TileKind.Default)
+                            onTileChanged?.Invoke(coord, i, oldK, TileKind.Default);
+                    }
+                }
+                p.LastTileKinds = null;
+                return;
+            }
+            if (p.LastTileKinds == null)
+            {
+                // First sight — emit (Default → kind) for every non-Default
+                // cell so subscribers can build their world view from events
+                // alone (no separate bootstrap-scan API needed).
+                p.LastTileKinds = new TileKind[tp.Length];
+                for (int i = 0; i < tp.Length; i++)
+                {
+                    TileKind newK = tp[i].Kind;
+                    p.LastTileKinds[i] = newK;
+                    if (newK != TileKind.Default)
+                        onTileChanged?.Invoke(coord, i, TileKind.Default, newK);
+                }
+                return;
+            }
+            if (p.LastTileKinds.Length != tp.Length)
+            {
+                // Cell count changed (unusual — would imply primal topology
+                // shifted). Treat as full refresh: walk old → Default, then
+                // Default → new, so subscribers can resync.
+                for (int i = 0; i < p.LastTileKinds.Length; i++)
+                    if (p.LastTileKinds[i] != TileKind.Default)
+                        onTileChanged?.Invoke(coord, i, p.LastTileKinds[i], TileKind.Default);
+                p.LastTileKinds = new TileKind[tp.Length];
+                for (int i = 0; i < tp.Length; i++)
+                {
+                    TileKind newK = tp[i].Kind;
+                    p.LastTileKinds[i] = newK;
+                    if (newK != TileKind.Default)
+                        onTileChanged?.Invoke(coord, i, TileKind.Default, newK);
+                }
+                return;
+            }
+            // Common case — same-length per-cell diff.
+            for (int i = 0; i < tp.Length; i++)
+            {
+                TileKind newK = tp[i].Kind;
+                if (p.LastTileKinds[i] == newK) continue;
+                TileKind oldK = p.LastTileKinds[i];
+                p.LastTileKinds[i] = newK;
+                onTileChanged?.Invoke(coord, i, oldK, newK);
+            }
+        }
 
         // Terrain mesh build. Walks every dual polygon and emits the wedge of
         // each non-carved corner. Each wedge is a 2-triangle fan written with

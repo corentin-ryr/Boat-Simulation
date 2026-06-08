@@ -12,10 +12,16 @@ namespace TerrainGrid
     //     normal terrain wedge so the player sees ground around / under the structure.
     //
     // Placement (TilePlacement.IsValid):
-    //   Default, Road, Building, Field, Market — paintable anywhere.
+    //   Default, Road, Building, Field, Market, House, Bakery — paintable anywhere.
     //   Lighthouse, Dock — only on coastal cells (primal vertices straddle sea level)
     //     OR adjacent to an existing Lighthouse/Dock cell. The adjacency clause lets
     //     the player extend a small harbour cluster inland by one ring per click.
+    //
+    // Sub-types of Building (House, Bakery, …) carry economic role: an agent's Home is
+    // a House cell, a Baker's Job is a Bakery cell. Building remains as the generic
+    // / decorative parent kind — paint a Building when you don't care about role.
+    // Adding a new role TileKind requires entries in TileKindPalette, TilePalette HUD,
+    // a Build*Mesh class, ChunkSurface dispatch, and ChunkManager materials.
     public enum TileKind : byte
     {
         Default    = 0,
@@ -25,6 +31,8 @@ namespace TerrainGrid
         Market     = 4,
         Lighthouse = 5,
         Dock       = 6,
+        House      = 7,
+        Bakery     = 8,
     }
 
     // Per-cell gameplay slot. `Payload` is reserved for kind-specific data (e.g. a

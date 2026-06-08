@@ -15,7 +15,7 @@ namespace TerrainGrid
     //
     // Controls:
     //   T              cycle through all entries in table order
-    //   1..7           jump directly to the kind whose hotkey matches
+    //   1..9           jump directly to the kind whose hotkey matches
     //   GUI button     same effect as the hotkey
     public class TilePalette : MonoBehaviour
     {
@@ -51,6 +51,8 @@ namespace TerrainGrid
             new Entry(TileKind.Market,     "Market",     KeyCode.Alpha5),
             new Entry(TileKind.Lighthouse, "Lighthouse", KeyCode.Alpha6),
             new Entry(TileKind.Dock,       "Dock",       KeyCode.Alpha7),
+            new Entry(TileKind.House,      "House",      KeyCode.Alpha8),
+            new Entry(TileKind.Bakery,     "Bakery",     KeyCode.Alpha9),
         };
 
         // Layout constants shared between OnGUI drawing and the screen-space hit-test.

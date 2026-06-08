@@ -46,7 +46,9 @@ namespace TerrainGrid.MeshBuilders
             new Color32(255, 255, 255, 255), // 4 Market      — neutral (structure on top)
             new Color32(255, 255, 255, 255), // 5 Lighthouse  — neutral (structure on top)
             new Color32(255, 255, 255, 255), // 6 Dock        — neutral (structure on top)
-            new Color32(255, 255, 255, 255), // 7 sentinel    — foreign corner
+            new Color32(220, 180, 140, 255), // 7 House       — warm sandstone (carves)
+            new Color32(230, 160, 100, 255), // 8 Bakery      — warm ochre (carves)
+            new Color32(255, 255, 255, 255), // 9 sentinel    — foreign corner
         };
         static readonly int SentinelIdx = Entries.Length - 1;
 

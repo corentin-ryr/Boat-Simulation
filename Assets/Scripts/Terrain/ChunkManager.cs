@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
@@ -59,6 +60,10 @@ namespace TerrainGrid
         public Material lighthouseMaterial;
         [Tooltip("Per-chunk Dock overlay (raised wedge stone block with buried walls).")]
         public Material dockMaterial;
+        [Tooltip("Per-chunk House overlay (low cottage wedge — residential sub-kind of Building).")]
+        public Material houseMaterial;
+        [Tooltip("Per-chunk Bakery overlay (workshop wedge + centroid chimney — workshop sub-kind of Building).")]
+        public Material bakeryMaterial;
 
         [Header("RTS Highlights")]
         [Tooltip("Colour blended over the cell under the cursor in RTS mode. Alpha controls " +
@@ -100,6 +105,22 @@ namespace TerrainGrid
         // Returns false when the chunk isn't currently in the render set.
         public bool TryGetPublishedChunk(ChunkCoord coord, out PrimalChunk chunk)
             => renderModel.TryGet(coord, out chunk);
+
+        // Fired on the main thread whenever a primal cell's TileKind diverges from the
+        // last-seen snapshot — i.e. a tile mutation has landed in the published mirror.
+        // Subscribers (BuildingRegistry, future quest system) react here instead of
+        // polling chunk Versions. First-sight loads DO emit (Default → kind) for each
+        // non-Default cell so subscribers can build their world view from events alone,
+        // without a separate bootstrap-scan API. Subscribers must be idempotent — a
+        // chunk that parks and reloads will replay the same first-sight events.
+        public event Action<ChunkCoord, int, TileKind, TileKind> OnTileChanged;
+
+        // Main-thread enumeration of chunks currently installed in the render mirror.
+        // Used by debug HUDs and the BuildingRegistry's startup pass (if subscribers
+        // join after chunks have already loaded). Returns an empty sequence before
+        // Start() has run.
+        public IEnumerable<ChunkCoord> LoadedRenderCoords
+            => renderModel != null ? renderModel.LoadedCoords : Enumerable.Empty<ChunkCoord>();
 
         // Exposed scalars so external scripts (TilePainter, save-load) can match the same
         // ChunkCoord math the model uses without duplicating constants.
@@ -150,9 +171,17 @@ namespace TerrainGrid
                 Market     = marketMaterial,
                 Lighthouse = lighthouseMaterial,
                 Dock       = dockMaterial,
+                House      = houseMaterial,
+                Bakery     = bakeryMaterial,
             };
+            // Surface emits per-cell diffs into this manager's OnTileChanged event.
+            // Captured via callback rather than a public field on Surface so the
+            // event surface stays on ChunkManager (the obvious subscription point
+            // for gameplay code).
             surface = new ChunkSurface(transform, groundMaterial, outlineMaterial, mats,
-                                       hexRadius, chunkGridSize, presenceCacheSize);
+                                       hexRadius, chunkGridSize, presenceCacheSize,
+                                       onTileChanged: (coord, cell, oldK, newK) =>
+                                           OnTileChanged?.Invoke(coord, cell, oldK, newK));
             surface.AddPrimalSource(coord => renderModel.TryGet(coord, out PrimalChunk pc) ? pc : null);
 
             // Register as a render-ready consumer: the streamer loads our requested chunks plus a
